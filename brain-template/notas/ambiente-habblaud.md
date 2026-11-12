@@ -3,7 +3,7 @@ titulo: Ambiente do servidor Habblaud
 tags: [ambiente, infraestrutura]
 atualizado: 2026-11-12
 ---
-Servidor: container Docker (Debian bookworm, Node 22) no Railway, publicado em https://habblaud.com.
+Servidor: container Docker (Debian bookworm, Node 22) no Railway (projeto "Habblaud | Claude Server", serviço claude-server), publicado em https://claude-server-production-bf2fccdc.up.railway.app.
 Código-fonte do próprio servidor: https://github.com/mlgrupo/claude-server
 
 O que persiste (volume em /data):

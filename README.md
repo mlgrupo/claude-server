@@ -1,6 +1,6 @@
 # Habblaud — servidor autônomo do Claude
 
-Servidor que roda o Claude (via [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview)) num container no Railway, acessível por chat web e por API em **https://habblaud.com**.
+Servidor que roda o Claude (via [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview)) num container no Railway, acessível por chat web e por API em **https://claude-server-production-bf2fccdc.up.railway.app** (domínio próprio a definir).
 
 - **Autônomo:** roda em modo `bypassPermissions` e nunca pede aprovação. Ferramentas que dependem de um humano (perguntas, modo plano) ficam desligadas.
 - **Cérebro que aprende:** depois de cada tarefa, um fork da sessão revisa o que aconteceu e grava os aprendizados em `/data/brain` (notas em markdown + índice + diário), versionado com git. O índice entra no prompt de toda conversa nova.
@@ -38,7 +38,7 @@ O container roda como usuário `node` (o Claude Code recusa o modo bypass como r
 2. No Railway, crie um serviço a partir deste repositório (o `railway.json` já aponta para o `Dockerfile`).
 3. **Adicione um volume** montado em `/data` (sem ele, tudo some a cada deploy).
 4. **Variáveis** (veja `.env.example`): `APP_PASSWORD`, `API_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`. Opcional: `GH_TOKEN` para o agente usar o GitHub.
-5. **Domínio:** em *Settings → Networking → Custom Domain*, adicione `habblaud.com` e crie no DNS (Cloudflare) o registro CNAME indicado pelo Railway.
+5. **Domínio próprio (opcional):** em *Settings → Networking → Custom Domain*, adicione o domínio (ex.: `app.habblaud.com`) e crie na Cloudflare o CNAME indicado pelo Railway. Atenção: `habblaud.com` (raiz) hoje serve a landing page do Habblaud.
 
 ## API
 
@@ -46,7 +46,7 @@ Todas as rotas `/api/*` exigem `Authorization: Bearer $API_TOKEN` (ou o cookie d
 
 **Síncrono** — espera a resposta final (bom para n8n e scripts):
 ```sh
-curl -X POST https://habblaud.com/api/ask \
+curl -X POST https://claude-server-production-bf2fccdc.up.railway.app/api/ask \
   -H "Authorization: Bearer $API_TOKEN" -H "Content-Type: application/json" \
   -d '{"message": "Liste os repositórios em /data/workspace"}'
 ```
@@ -55,13 +55,13 @@ Resposta: `{ runId, conversationId, status, result, meta, brain }`. Mande o `con
 **Assíncrono** — para tarefas longas:
 ```sh
 # inicia
-curl -X POST https://habblaud.com/api/chat -H "Authorization: Bearer $API_TOKEN" \
+curl -X POST https://claude-server-production-bf2fccdc.up.railway.app/api/chat -H "Authorization: Bearer $API_TOKEN" \
   -H "Content-Type: application/json" -d '{"message": "..."}'
 # → { "runId": "...", "conversationId": "..." }
 
-curl https://habblaud.com/api/runs/<runId> -H "Authorization: Bearer $API_TOKEN"          # status/resultado
-curl -N https://habblaud.com/api/runs/<runId>/events -H "Authorization: Bearer $API_TOKEN" # eventos ao vivo (SSE)
-curl -X POST https://habblaud.com/api/runs/<runId>/stop -H "Authorization: Bearer $API_TOKEN"
+curl https://claude-server-production-bf2fccdc.up.railway.app/api/runs/<runId> -H "Authorization: Bearer $API_TOKEN"          # status/resultado
+curl -N https://claude-server-production-bf2fccdc.up.railway.app/api/runs/<runId>/events -H "Authorization: Bearer $API_TOKEN" # eventos ao vivo (SSE)
+curl -X POST https://claude-server-production-bf2fccdc.up.railway.app/api/runs/<runId>/stop -H "Authorization: Bearer $API_TOKEN"
 ```
 
 Corpo aceito em `/api/ask` e `/api/chat`: `message` (obrigatório), `conversationId`, `model` (ex.: `claude-sonnet-5-5`).
