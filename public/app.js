@@ -38,8 +38,19 @@ async function api(path, opts = {}) {
 }
 
 // ---------------------------------------------------------------- Markdown
+let mdHooked = false;
 function renderMd(text) {
   if (window.marked && window.DOMPurify) {
+    if (!mdHooked) {
+      // Links (inclusive arquivos em /api/files/raw) abrem em nova aba para não sair do chat.
+      DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+        if (node.tagName === 'A' && node.getAttribute('href')) {
+          node.setAttribute('target', '_blank');
+          node.setAttribute('rel', 'noopener noreferrer');
+        }
+      });
+      mdHooked = true;
+    }
     return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }));
   }
   const d = el('div');

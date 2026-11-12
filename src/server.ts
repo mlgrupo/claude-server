@@ -5,6 +5,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { login, logout, requireAuth, requireJsonBody } from './auth.js';
 import { brainHistory, initBrain, listBrainFiles, readBrainFile } from './brain.js';
 import { config, hasClaudeCredentials, validateConfig } from './config.js';
+import { listFiles, sendWorkspaceFile } from './files.js';
 import { HttpError, abortAll, activeRunFor, getRun, runningCount, startRun, stopRun, subscribe, type Run, type RunEvent } from './runner.js';
 import { deleteConversation, getConversation, initStore, listConversations } from './store.js';
 import { attachTerminal, closeAllTerminals, terminalCount } from './terminal.js';
@@ -184,6 +185,10 @@ async function main(): Promise<void> {
       res.json({ path: rel, content });
     }),
   );
+
+  // Arquivos do workspace: o agente entrega links /api/files/raw?path=... no chat.
+  api.get('/files', asyncRoute(listFiles));
+  api.get('/files/raw', asyncRoute(sendWorkspaceFile));
 
   app.use('/api', api);
   app.use(express.static(PUBLIC_DIR, { index: 'index.html', maxAge: '5m' }));
