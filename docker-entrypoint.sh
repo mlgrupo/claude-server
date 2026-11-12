@@ -24,6 +24,18 @@ if [ "$(id -u)" = "0" ]; then
   fi
   as_user git config --global init.defaultBranch main
 
+  # Shell do terminal web: .bashrc padrão do Debian + prompt "habblaud:pasta$" (só na primeira vez).
+  if [ ! -f "$DATA_DIR/home/.bashrc" ]; then
+    cp /etc/skel/.bashrc "$DATA_DIR/home/.bashrc"
+    cat >> "$DATA_DIR/home/.bashrc" <<'EOF'
+
+# Habblaud
+PS1='\[\e[1;33m\]habblaud\[\e[0m\]:\[\e[1;36m\]\w\[\e[0m\]\$ '
+alias ll='ls -alF'
+EOF
+    chown "$APP_USER:$APP_USER" "$DATA_DIR/home/.bashrc"
+  fi
+
   # Com GH_TOKEN definido, gh e git (HTTPS) ficam autenticados no GitHub.
   if [ -n "$GH_TOKEN" ]; then
     as_user gh auth setup-git >/dev/null 2>&1 || echo "[entrypoint] aviso: gh auth setup-git falhou"

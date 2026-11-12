@@ -14,6 +14,7 @@ const state = {
   run: null, // execução que o botão Parar controla
   streams: new Set(), // EventSources abertos
   running: new Set(),
+  view: 'chat', // 'chat' | 'terminal'
 };
 
 const BRAIN_ICON =
@@ -277,7 +278,7 @@ function renderConvList() {
   }
   for (const c of state.conversations) {
     const row = el('div', 'conv-item');
-    if (c.id === state.currentId) row.classList.add('active');
+    if (c.id === state.currentId && state.view !== 'terminal') row.classList.add('active');
     const a = el('a');
     a.href = `#/c/${c.id}`;
     a.append(el('span', null, c.title), el('small', null, fmtWhen(c.updatedAt)));
@@ -318,6 +319,8 @@ async function openConversation(id) {
   renderConvList();
   setBusy(false, '');
   if (!id) return resetThread();
+  const known = state.conversations.find((c) => c.id === id);
+  if (known) $('#conv-title').textContent = known.title;
   try {
     const conv = await api(`/conversations/${id}`);
     if (state.currentId !== id) return;
@@ -330,9 +333,14 @@ async function openConversation(id) {
 }
 
 function route() {
+  closeNav();
+  if (location.hash === '#/terminal') return showTerminal();
+  if (state.view === 'terminal') {
+    setView('chat');
+    $('#conv-title').textContent = 'Nova tarefa';
+  }
   const m = location.hash.match(/^#\/c\/([a-z0-9-]+)$/);
   openConversation(m ? m[1] : null);
-  closeNav();
 }
 
 // ---------------------------------------------------------------- Envio
@@ -428,6 +436,229 @@ async function openBrain() {
   }
 }
 
+// ---------------------------------------------------------------- Terminal
+// Shell no servidor via WebSocket. A sessão continua viva se a conexão cair:
+// ao reconectar, o servidor reenvia a tela recente.
+const XTERM_CDN = 'https://cdn.jsdelivr.net/npm/@xterm';
+const TERM_THEME = {
+  background: '#0F2A33',
+  foreground: '#DCE8EC',
+  cursor: '#D99A1E',
+  cursorAccent: '#0F2A33',
+  selectionBackground: 'rgba(217, 154, 30, 0.35)',
+  black: '#0A1F26', red: '#E0667A', green: '#5FBF8F', yellow: '#E6AE3E',
+  blue: '#7AA7F2', magenta: '#C38FE0', cyan: '#4FB3C4', white: '#CFE0E5',
+  brightBlack: '#5B7882', brightRed: '#F08A9B', brightGreen: '#86D9AE', brightYellow: '#F3C86A',
+  brightBlue: '#A3C3F7', brightMagenta: '#D9B3EF', brightCyan: '#7FD3E0', brightWhite: '#FFFFFF',
+};
+const term = { xterm: null, fit: null, ws: null, sessionId: null, ended: false, killing: false, retry: 0, retryTimer: 0, ctrl: false };
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Não consegui carregar o terminal (falha ao baixar o xterm.js). Verifique a conexão e recarregue.'));
+    document.head.append(s);
+  });
+}
+
+let xtermLoading = null;
+function loadXterm() {
+  if (!xtermLoading) {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = `${XTERM_CDN}/xterm@6.0.0/css/xterm.css`;
+    document.head.append(css);
+    xtermLoading = loadScript(`${XTERM_CDN}/xterm@6.0.0/lib/xterm.js`).then(() =>
+      Promise.all([
+        loadScript(`${XTERM_CDN}/addon-fit@0.11.0/lib/addon-fit.js`),
+        loadScript(`${XTERM_CDN}/addon-web-links@0.12.0/lib/addon-web-links.js`),
+      ]),
+    );
+    xtermLoading.catch(() => (xtermLoading = null));
+  }
+  return xtermLoading;
+}
+
+function termSend(payload) {
+  if (term.ws?.readyState === WebSocket.OPEN) term.ws.send(payload);
+}
+function termResizeMsg() {
+  termSend('1' + JSON.stringify({ type: 'resize', cols: term.xterm.cols, rows: term.xterm.rows }));
+}
+function fitTerm() {
+  if (!term.xterm || $('#term-view').hidden) return;
+  try {
+    term.fit.fit();
+  } catch {
+    /* elemento ainda sem tamanho */
+  }
+}
+function setTermStatus(text, tone) {
+  const s = $('#term-status');
+  s.textContent = text;
+  s.className = `term-status${tone ? ` ${tone}` : ''}`;
+  $('#term-kill').disabled = tone !== 'ok';
+}
+function setCtrl(on) {
+  term.ctrl = on;
+  $('#term-keys [data-key="ctrl"]').setAttribute('aria-pressed', String(on));
+}
+
+async function ensureTerminal() {
+  if (term.xterm) return;
+  await loadXterm();
+  try {
+    await document.fonts.load('14px "JetBrains Mono"');
+  } catch {
+    /* segue com a fonte reserva */
+  }
+  const x = new window.Terminal({
+    fontFamily: '"JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace',
+    fontSize: coarse ? 13 : 14,
+    lineHeight: 1.15,
+    cursorBlink: true,
+    scrollback: 5000,
+    macOptionIsMeta: true,
+    theme: TERM_THEME,
+  });
+  term.fit = new window.FitAddon.FitAddon();
+  x.loadAddon(term.fit);
+  x.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+  x.open($('#term'));
+
+  // Ctrl+C com texto selecionado copia; sem seleção, interrompe o comando. Ctrl+V cola.
+  x.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== 'keydown') return true;
+    const mod = ev.ctrlKey || ev.metaKey;
+    const key = ev.key.toLowerCase();
+    if (mod && key === 'c' && (ev.shiftKey || x.hasSelection())) {
+      if (x.hasSelection()) navigator.clipboard?.writeText(x.getSelection()).catch(() => undefined);
+      return false;
+    }
+    if (mod && key === 'v') return false; // o navegador dispara o "colar" e o xterm envia o texto
+    return true;
+  });
+
+  x.onData((data) => {
+    if (term.ctrl && data.length === 1) {
+      const code = data.toUpperCase().charCodeAt(0);
+      if (code >= 64 && code <= 95) data = String.fromCharCode(code - 64);
+      setCtrl(false);
+    }
+    termSend('0' + data);
+  });
+  x.onResize(termResizeMsg);
+  new ResizeObserver(fitTerm).observe($('#term'));
+  term.xterm = x;
+}
+
+function termConnect(fresh) {
+  clearTimeout(term.retryTimer);
+  const x = term.xterm;
+  const qs = new URLSearchParams({ cols: String(x.cols), rows: String(x.rows) });
+  if (fresh) qs.set('new', '1');
+  else if (term.sessionId) qs.set('session', term.sessionId);
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/terminal?${qs}`);
+  term.ws = ws;
+  term.ended = false;
+  term.killing = false;
+  $('#term-ended').hidden = true;
+  setTermStatus(term.retry ? 'Reconectando…' : 'Conectando…', 'warn');
+
+  ws.onopen = () => {
+    term.retry = 0;
+    setTermStatus('Conectado', 'ok');
+    fitTerm();
+    termResizeMsg();
+  };
+  ws.onmessage = (ev) => {
+    const kind = ev.data[0];
+    const body = ev.data.slice(1);
+    if (kind === '0') return x.write(body);
+    let c;
+    try {
+      c = JSON.parse(body);
+    } catch {
+      return;
+    }
+    if (c.type === 'session') {
+      const lost = term.sessionId && term.sessionId !== c.id;
+      term.sessionId = c.id;
+      x.reset(); // o servidor reenvia a tela recente logo em seguida
+      if (lost) x.write('\x1b[2m[A sessão anterior terminou (o servidor pode ter reiniciado). Este é um terminal novo.]\x1b[0m\r\n');
+    } else if (c.type === 'exit') {
+      showTermEnded(c.code && !c.signal && !term.killing ? `O shell saiu com código ${c.code}.` : 'Sessão encerrada.');
+    } else if (c.type === 'error') {
+      showTermEnded(c.message);
+    }
+  };
+  ws.onclose = () => {
+    if (term.ws !== ws) return;
+    term.ws = null;
+    if (term.ended) return;
+    term.retry++;
+    setTermStatus('Reconectando…', 'warn');
+    const delay = Math.min(1000 * 2 ** (term.retry - 1), 15000);
+    term.retryTimer = setTimeout(async () => {
+      try {
+        const me = await api('/me');
+        if (me.terminal === false) return showTermEnded('O terminal está desligado neste servidor (variável TERMINAL=off).');
+      } catch {
+        if ($('#app').hidden) return; // sessão expirou: a tela de login já apareceu
+      }
+      if (state.view === 'terminal') termConnect(false);
+    }, delay);
+  };
+}
+
+function termDisconnect() {
+  clearTimeout(term.retryTimer);
+  const ws = term.ws;
+  term.ws = null;
+  ws?.close();
+}
+
+function showTermEnded(message) {
+  term.ended = true;
+  termDisconnect();
+  $('#term-ended-msg').textContent = message;
+  $('#term-ended').hidden = false;
+  setTermStatus('Encerrado');
+}
+
+function setView(view) {
+  state.view = view;
+  const isTerm = view === 'terminal';
+  $('#scroller').hidden = isTerm;
+  $('#composer').hidden = isTerm;
+  $('#model-pick').hidden = isTerm;
+  $('#term-view').hidden = !isTerm;
+  $('#term-actions').hidden = !isTerm;
+  $('#term-keys').hidden = !(isTerm && coarse);
+  $('#open-term').classList.toggle('active', isTerm);
+  if (isTerm) $('#conv-title').textContent = 'Terminal';
+  renderConvList();
+}
+
+async function showTerminal() {
+  setView('terminal');
+  try {
+    await ensureTerminal();
+  } catch (err) {
+    showTermEnded(err.message);
+    return;
+  }
+  if (state.view !== 'terminal') return;
+  fitTerm();
+  if (!term.ws && !term.ended) {
+    clearTimeout(term.retryTimer);
+    termConnect(false);
+  }
+  term.xterm.focus();
+}
+
 // ---------------------------------------------------------------- Navegação mobile
 function openNav() {
   $('#app').classList.add('nav-open');
@@ -441,6 +672,7 @@ function closeNav() {
 // ---------------------------------------------------------------- Login / boot
 function showLogin() {
   closeStream();
+  termDisconnect();
   $('#app').hidden = true;
   $('#login').hidden = false;
   $('#password').focus();
@@ -451,7 +683,7 @@ async function showApp() {
   $('#app').hidden = false;
   await refreshList();
   route();
-  $('#input').focus();
+  if (state.view === 'chat') $('#input').focus();
 }
 
 async function boot() {
@@ -538,6 +770,38 @@ $('#close-brain').addEventListener('click', () => $('#brain').close());
 $('#brain').addEventListener('click', (ev) => {
   if (ev.target === ev.currentTarget) ev.currentTarget.close();
 });
+$('#open-term').addEventListener('click', closeNav);
+$('#term-kill').addEventListener('click', () => {
+  if (!confirm('Encerrar o terminal? Os comandos que estiverem rodando nele serão finalizados.')) return;
+  term.killing = true;
+  termSend('1' + JSON.stringify({ type: 'kill' }));
+});
+$('#term-new').addEventListener('click', () => {
+  $('#term-ended').hidden = true;
+  term.sessionId = null;
+  term.retry = 0;
+  term.xterm?.reset();
+  if (term.xterm) termConnect(true);
+  else showTerminal();
+  term.xterm?.focus();
+});
+const ARROWS = { up: 'A', down: 'B', right: 'C', left: 'D' };
+for (const b of document.querySelectorAll('#term-keys button')) {
+  // Não tira o foco do terminal (o teclado do celular continua aberto).
+  b.addEventListener('pointerdown', (ev) => ev.preventDefault());
+  b.addEventListener('mousedown', (ev) => ev.preventDefault());
+  b.addEventListener('click', () => {
+    const k = b.dataset.key;
+    if (k === 'ctrl') return setCtrl(!term.ctrl);
+    let seq = '';
+    if (k === 'esc') seq = '\x1b';
+    else if (k === 'tab') seq = '\t';
+    else if (k === 'ctrlc') seq = '\x03';
+    else if (ARROWS[k]) seq = (term.xterm?.modes.applicationCursorKeysMode ? '\x1bO' : '\x1b[') + ARROWS[k];
+    termSend('0' + seq);
+    term.xterm?.focus();
+  });
+}
 $('#menu').addEventListener('click', openNav);
 $('#scrim').addEventListener('click', closeNav);
 window.addEventListener('hashchange', route);

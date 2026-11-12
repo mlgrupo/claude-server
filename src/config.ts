@@ -41,6 +41,10 @@ export const config = {
   // Cérebro
   brainReflect: (['auto', 'always', 'off'].includes(reflectRaw) ? reflectRaw : 'auto') as 'auto' | 'always' | 'off',
   brainModel: env('BRAIN_MODEL'),
+
+  // Terminal web
+  terminalEnabled: env('TERMINAL') !== 'off',
+  terminalIdleMs: num('TERMINAL_IDLE_MIN', 60) * 60_000,
 };
 
 /** Variáveis que só o servidor precisa — nunca vão para o processo do agente. */

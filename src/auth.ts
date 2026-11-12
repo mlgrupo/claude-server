@@ -1,6 +1,10 @@
 import crypto from 'node:crypto';
+import type { IncomingHttpHeaders } from 'node:http';
 import type { NextFunction, Request, Response } from 'express';
 import { config } from './config.js';
+
+/** Qualquer requisição com cabeçalhos: Request do Express ou o IncomingMessage de um upgrade WebSocket. */
+type WithHeaders = { headers: IncomingHttpHeaders };
 
 const COOKIE = 'hb_session';
 const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -20,7 +24,7 @@ function safeEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(ha, hb);
 }
 
-function readCookie(req: Request, name: string): string | undefined {
+function readCookie(req: WithHeaders, name: string): string | undefined {
   const header = req.headers.cookie;
   if (!header) return undefined;
   for (const part of header.split(';')) {
@@ -31,7 +35,7 @@ function readCookie(req: Request, name: string): string | undefined {
   return undefined;
 }
 
-function validSessionCookie(req: Request): boolean {
+function validSessionCookie(req: WithHeaders): boolean {
   const raw = readCookie(req, COOKIE);
   if (!raw) return false;
   const [exp, sig] = raw.split('.');
@@ -40,14 +44,14 @@ function validSessionCookie(req: Request): boolean {
   return Number(exp) > Date.now();
 }
 
-function validBearer(req: Request): boolean {
+function validBearer(req: WithHeaders): boolean {
   if (!config.apiToken) return false;
   const h = req.headers.authorization;
   if (!h?.startsWith('Bearer ')) return false;
   return safeEqual(h.slice(7).trim(), config.apiToken);
 }
 
-export function isAuthenticated(req: Request): boolean {
+export function isAuthenticated(req: WithHeaders): boolean {
   return validBearer(req) || validSessionCookie(req);
 }
 

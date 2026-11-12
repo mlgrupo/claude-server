@@ -5,6 +5,7 @@ Servidor que roda o Claude (via [Claude Agent SDK](https://code.claude.com/docs/
 - **Autônomo:** roda em modo `bypassPermissions` e nunca pede aprovação. Ferramentas que dependem de um humano (perguntas, modo plano) ficam desligadas.
 - **Cérebro que aprende:** depois de cada tarefa, um fork da sessão revisa o que aconteceu e grava os aprendizados em `/data/brain` (notas em markdown + índice + diário), versionado com git. O índice entra no prompt de toda conversa nova.
 - **Persistente:** conversas, sessões do Claude, cérebro, skills e workspace ficam no volume `/data`.
+- **Terminal no navegador:** um shell `bash` no container, pelo menu *Terminal* da interface.
 
 ## Como funciona
 
@@ -39,6 +40,18 @@ O container roda como usuário `node` (o Claude Code recusa o modo bypass como r
 3. **Adicione um volume** montado em `/data` (sem ele, tudo some a cada deploy).
 4. **Variáveis** (veja `.env.example`): `APP_PASSWORD`, `API_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`. Opcional: `GH_TOKEN` para o agente usar o GitHub.
 5. **Domínio próprio (opcional):** em *Settings → Networking → Custom Domain*, adicione o domínio (ex.: `app.habblaud.com`) e crie na Cloudflare o CNAME indicado pelo Railway. Atenção: `habblaud.com` (raiz) hoje serve a landing page do Habblaud.
+
+## Terminal
+
+O item **Terminal** na barra lateral abre um shell `bash` no container, como usuário `node` (com `sudo`), começando em `/data/workspace`. É o mesmo ambiente do agente: as senhas do servidor (`APP_PASSWORD`, `API_TOKEN`, `SESSION_SECRET`) não aparecem nele.
+
+- **A sessão sobrevive à conexão:** se a página fechar ou a rede cair, o shell continua rodando. Ao voltar, a tela recente é reconstruída. Outra aba ou outro aparelho entra na mesma sessão.
+- **Encerramento:** sem ninguém conectado por 60 minutos (`TERMINAL_IDLE_MIN`), o shell é finalizado. Para tarefas mais longas, use `tmux` (já instalado) ou `nohup`. Um deploy novo também encerra o shell, porque reinicia o container.
+- **Copiar e colar:** Ctrl+C com texto selecionado copia; sem seleção, interrompe o comando. Ctrl+V cola.
+- **Celular:** uma fileira de teclas extras (Esc, Tab, Ctrl, setas e ^C) aparece embaixo do terminal.
+- **Desligar:** `TERMINAL=off`.
+
+Só o que fica em `/data` persiste entre deploys (veja a tabela acima).
 
 ## API
 
@@ -79,11 +92,12 @@ Localmente, sem `CLAUDE_CODE_OAUTH_TOKEN`, o SDK usa o login do Claude Code da s
 
 ## Segurança
 
-Este servidor executa qualquer comando sem aprovação e fica exposto na internet. Na prática, **a senha e o API token dão um shell no servidor** e acesso às credenciais configuradas nele.
+Este servidor executa qualquer comando sem aprovação e fica exposto na internet. **A senha e o API token dão um shell no servidor** (pelo agente e pelo terminal web) e acesso às credenciais configuradas nele.
 
 - Use senha e token longos e aleatórios; troque se vazarem (trocar `APP_PASSWORD` derruba todas as sessões web).
 - `APP_PASSWORD`, `API_TOKEN` e `SESSION_SECRET` não são repassadas ao agente. As demais variáveis (`CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`…) são visíveis para ele.
 - Conteúdo da web que o agente lê pode tentar manipulá-lo (prompt injection). Dê ao `GH_TOKEN` e a outras credenciais só as permissões necessárias.
 - O login tem limite de 10 tentativas a cada 15 minutos por IP.
+- O terminal (WebSocket em `/api/terminal`) exige o mesmo login e só aceita conexões vindas da própria página, o que impede que outro site o abra usando o seu cookie. Aberturas de sessão ficam no log do Railway, com o IP.
 
 **Assinatura vs. API:** o token de `claude setup-token` usa os limites da sua assinatura Pro/Max — serve para uso próprio e da sua equipe. Para oferecer o agente a clientes ou terceiros, os termos da Anthropic exigem `ANTHROPIC_API_KEY`.

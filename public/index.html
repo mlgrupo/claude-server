@@ -36,6 +36,10 @@
       </div>
       <nav id="conv-list" class="conv-list" aria-label="Conversas"></nav>
       <div class="sidebar-bottom">
+        <a id="open-term" class="side-link" href="#/terminal">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8l2.5 2L6 12M10.5 12.5H14"/></svg>
+          Terminal
+        </a>
         <button id="open-brain" class="side-link" type="button">
           <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.2"/><circle cx="3.5" cy="5" r="1.6"/><circle cx="16.5" cy="5" r="1.6"/><circle cx="4" cy="16" r="1.6"/><circle cx="16" cy="15.5" r="1.6"/><path d="M5 6l3 2.4M15 6l-3 2.4M5.3 15l2.6-2.6M14.8 14.6l-2.6-2.3"/></svg>
           Cérebro
@@ -51,7 +55,11 @@
           <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 6h14M3 10h14M3 14h14"/></svg>
         </button>
         <h2 id="conv-title" class="conv-title">Nova tarefa</h2>
-        <label class="model-pick">
+        <div id="term-actions" class="term-actions" hidden>
+          <span id="term-status" class="term-status" aria-live="polite"></span>
+          <button id="term-kill" class="btn-ghost" type="button" title="Finaliza o shell e tudo que estiver rodando nele">Encerrar</button>
+        </div>
+        <label id="model-pick" class="model-pick">
           <span class="visually-hidden">Modelo</span>
           <select id="model" title="Modelo usado nas próximas mensagens">
             <option value="">Modelo padrão</option>
@@ -84,6 +92,24 @@
           <button id="send" class="btn-primary" type="submit">Enviar</button>
         </div>
       </form>
+
+      <div id="term-view" class="term-view" hidden>
+        <div id="term" class="term"></div>
+        <div id="term-ended" class="term-ended" role="status" hidden>
+          <p id="term-ended-msg">Sessão encerrada.</p>
+          <button id="term-new" class="btn-primary" type="button">Abrir novo terminal</button>
+        </div>
+        <div id="term-keys" class="term-keys" hidden>
+          <button type="button" data-key="esc">Esc</button>
+          <button type="button" data-key="tab">Tab</button>
+          <button type="button" data-key="ctrl" aria-pressed="false">Ctrl</button>
+          <button type="button" data-key="up" aria-label="Seta para cima">↑</button>
+          <button type="button" data-key="down" aria-label="Seta para baixo">↓</button>
+          <button type="button" data-key="left" aria-label="Seta para a esquerda">←</button>
+          <button type="button" data-key="right" aria-label="Seta para a direita">→</button>
+          <button type="button" data-key="ctrlc" aria-label="Interromper o comando (Ctrl+C)">^C</button>
+        </div>
+      </div>
     </section>
   </div>
 

@@ -7,6 +7,7 @@ import { brainHistory, initBrain, listBrainFiles, readBrainFile } from './brain.
 import { config, hasClaudeCredentials, validateConfig } from './config.js';
 import { HttpError, abortAll, activeRunFor, getRun, runningCount, startRun, stopRun, subscribe, type Run, type RunEvent } from './runner.js';
 import { deleteConversation, getConversation, initStore, listConversations } from './store.js';
+import { attachTerminal, closeAllTerminals, terminalCount } from './terminal.js';
 
 const PUBLIC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
@@ -73,6 +74,8 @@ async function main(): Promise<void> {
       brainReflect: config.brainReflect,
       credentials: hasClaudeCredentials(),
       running: runningCount(),
+      terminal: config.terminalEnabled,
+      terminals: terminalCount(),
     });
   });
 
@@ -196,10 +199,12 @@ async function main(): Promise<void> {
   });
   server.requestTimeout = 0; // /api/ask e SSE podem durar muito
   server.headersTimeout = 65_000;
+  attachTerminal(server); // WebSocket em /api/terminal
 
   const shutdown = (signal: string) => {
     console.log(`[${signal}] encerrando — interrompendo tarefas em andamento`);
     abortAll();
+    closeAllTerminals();
     server.close();
     setTimeout(() => process.exit(0), 8_000).unref();
   };
