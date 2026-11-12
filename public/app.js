@@ -506,8 +506,18 @@ function setCtrl(on) {
   $('#term-keys [data-key="ctrl"]').setAttribute('aria-pressed', String(on));
 }
 
-async function ensureTerminal() {
-  if (term.xterm) return;
+// Uma única criação, mesmo que a tela do terminal seja aberta duas vezes seguidas
+// (ex.: clique em "Terminal" enquanto a lista de conversas ainda carrega após o login).
+let termInit = null;
+function ensureTerminal() {
+  if (!termInit) termInit = createTerminal().catch((err) => {
+    termInit = null;
+    throw err;
+  });
+  return termInit;
+}
+
+async function createTerminal() {
   await loadXterm();
   try {
     await document.fonts.load('14px "JetBrains Mono"');
