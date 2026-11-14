@@ -11,6 +11,10 @@
 //
 // Sem ferramenta, o texto de terceiros que chega no prompt (mensagem de lead,
 // por exemplo) não consegue mexer em nada no servidor.
+//
+// Os agentes rodam com a chave da API (AGENTES_ANTHROPIC_API_KEY), nunca com a
+// assinatura de alguém da equipe: sem a chave, recusam com 503 e quem chamou
+// segue pelo caminho dele.
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
@@ -20,7 +24,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { agentEnv, config } from './config.js';
-import { registrarUsoNoEscritorio } from './escritorio.js';
+import { esquecerUsoNoEscritorio, registrarUsoNoEscritorio } from './escritorio.js';
 
 export type Esforco = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 export type Origem = 'tela' | 'automatico';
@@ -159,7 +163,9 @@ export function escolherAgente(
 }
 
 // ---------------------------------------------------------------------------
-// Limite da assinatura: protege o uso da equipe (chat e terminal) dos lotes.
+// Uso da assinatura da equipe (a conta do Claude em uso no chat e no
+// terminal), para o medidor da tela de Agentes e o escritório. Os agentes não
+// gastam a assinatura: rodam com a chave da API (AGENTES_ANTHROPIC_API_KEY).
 // ---------------------------------------------------------------------------
 
 interface LimiteDaAssinatura {
@@ -170,8 +176,7 @@ interface LimiteDaAssinatura {
   em: number;
 }
 
-// A última leitura vai para o disco: depois de um deploy, os tetos já valem
-// desde o primeiro pedido (sem ela, o primeiro lote passaria às cegas).
+// A última leitura vai para o disco: depois de um deploy, o medidor não zera.
 const ARQUIVO_DO_LIMITE = path.join(config.agentesDir, 'limite-da-assinatura.json');
 let limite: LimiteDaAssinatura | null = lerLimiteGuardado();
 let gravandoLimite: Promise<void> = Promise.resolve();
@@ -210,21 +215,12 @@ export function registrarLimite(info: Record<string, unknown> | undefined): void
     .catch(() => undefined);
 }
 
-/** Motivo para recusar o pedido por causa da assinatura, ou null. */
-export function bloqueioDaAssinatura(
-  origem: Origem,
-  atual: LimiteDaAssinatura | null = limite,
-  agora = Date.now(),
-): string | null {
-  if (!atual) return null;
-  // Janela renovou: o número guardado não vale mais.
-  if (atual.renovaEm && atual.renovaEm <= agora) return null;
-  if (atual.status === 'rejected') return 'a assinatura está no limite';
-  const teto = origem === 'tela' ? config.agentesLimiteTela : config.agentesLimiteAutomatico;
-  if (atual.utilizacao !== null && atual.utilizacao >= teto) {
-    return `a assinatura está em ${Math.round(atual.utilizacao * 100)}% da janela (teto ${Math.round(teto * 100)}% para pedidos ${origem === 'tela' ? 'de tela' : 'automáticos'})`;
-  }
-  return null;
+/** Trocou a conta do Claude: o uso guardado era da outra. */
+export function esquecerLimite(): void {
+  limite = null;
+  esquecerUsoNoEscritorio();
+  gravandoLimite = gravandoLimite.then(() => fs.rm(ARQUIVO_DO_LIMITE, { force: true })).catch(() => undefined);
+  avisar();
 }
 
 // ---------------------------------------------------------------------------
@@ -341,10 +337,11 @@ export function executarAgente(pedido: PedidoDeAgente): Promise<RespostaDeAgente
 }
 
 function admitir(pedido: PedidoDeAgente): Promise<RespostaDeAgente> {
-  const bloqueio = bloqueioDaAssinatura(pedido.origem);
-  if (bloqueio) {
-    registrar(pedido, 'recusado', 0, 0, null, bloqueio);
-    return Promise.reject(new ErroDeAgente(429, 'assinatura_no_limite', bloqueio));
+  if (!config.agentesApiKey) {
+    // Quem chamou segue pelo caminho dele (o HofOS cai na API própria na hora).
+    const msg = 'os agentes usam a chave da API e AGENTES_ANTHROPIC_API_KEY não está definida';
+    registrar(pedido, 'recusado', 0, 0, null, msg);
+    return Promise.reject(new ErroDeAgente(503, 'sem_chave_da_api', msg));
   }
   const { agente } = pedido;
   const esperando = naFilaDoAgente(agente.id);
@@ -456,7 +453,9 @@ async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<Resposta
       maxTurns: pedido.esquema ? 4 : 2,
       ...(pedido.esquema ? { outputFormat: { type: 'json_schema', schema: pedido.esquema } } : {}),
       abortController: abort,
-      env: agentEnv(),
+      // A chave da API vem antes do login da assinatura no Claude Code: os
+      // agentes nunca gastam a conta de quem está usando o chat.
+      env: { ...agentEnv(), ANTHROPIC_API_KEY: config.agentesApiKey, CLAUDE_CODE_OAUTH_TOKEN: undefined },
       stderr: (data: string) => process.stderr.write(`[agente ${agente.id}] ${data}`),
     };
     const prompt = pedido.imagens.length ? promptComImagens(pedido) : pedido.prompt;
@@ -466,7 +465,7 @@ async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<Resposta
         if (typeof m.model === 'string') modelo = m.model;
         eventos.push({ type: 'system', subtype: 'init', model: m.model, session_id: m.session_id });
       } else if (m.type === 'rate_limit_event') {
-        registrarLimite(m.rate_limit_info as Record<string, unknown>);
+        // Limite da chave da API, não da assinatura: não mexe no medidor.
         eventos.push(m);
       } else if (m.type === 'result') {
         eventos.push(m);
@@ -701,6 +700,9 @@ export function painelDosAgentes() {
   return {
     dia,
     maxSimultaneos: config.agentesMaxSimultaneos,
+    /** Como os agentes se autenticam: só com a chave da API. */
+    credencial: config.agentesApiKey ? 'chave_da_api' : 'sem_chave',
+    /** Uso da assinatura da equipe (chat e terminal), não dos agentes. */
     assinatura: limite
       ? {
           utilizacao: limite.utilizacao,
@@ -708,8 +710,6 @@ export function painelDosAgentes() {
           status: limite.status,
           tipo: limite.tipo,
           atualizadoEm: new Date(limite.em).toISOString(),
-          tetoAutomatico: config.agentesLimiteAutomatico,
-          tetoTela: config.agentesLimiteTela,
         }
       : null,
     agentes: listaDeAgentes().map((a) => {

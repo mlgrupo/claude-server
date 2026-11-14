@@ -20,6 +20,12 @@ import { agentEnv, config } from './config.js';
 
 const WS_PATH = '/api/terminal';
 const MAX_SESSIONS = 5;
+/** Comandos que um terminal novo pode já abrir rodando (?cmd=...). Só estes, nunca texto livre. */
+const COMANDOS_INICIAIS: Record<string, string> = {
+  'entrar-claude': 'habblaud-conta entrar claude',
+  'entrar-codex': 'habblaud-conta entrar codex',
+  'entrar-gemini': 'habblaud-conta entrar gemini',
+};
 const SCROLLBACK_CHARS = 400_000;
 const HIGH_WATER = 2 * 1024 * 1024; // pausa o shell se o navegador não acompanha a saída
 const LOW_WATER = 256 * 1024;
@@ -228,13 +234,14 @@ function attach(ws: WebSocket, s: Session, created: boolean): void {
 
 function onConnection(ws: WebSocket, url: URL, ip: string): void {
   const requested = url.searchParams.get('session');
-  const fresh = url.searchParams.get('new') === '1';
+  const inicial = COMANDOS_INICIAIS[url.searchParams.get('cmd') ?? ''];
+  const fresh = url.searchParams.get('new') === '1' || inicial !== undefined;
   const cols = clampSize(url.searchParams.get('cols'), 100, 1000);
   const rows = clampSize(url.searchParams.get('rows'), 30, 500);
 
   // Sem sessão pedida: volta para a mais recente (o terminal "continua de onde parou").
   // Sessão pedida que já não existe: abre uma nova, e o navegador avisa que a anterior terminou.
-  let s = requested ? sessions.get(requested) : undefined;
+  let s = requested && !inicial ? sessions.get(requested) : undefined;
   if (!s && !requested && !fresh) s = mostRecent();
 
   let created = false;
@@ -252,7 +259,9 @@ function onConnection(ws: WebSocket, url: URL, ip: string): void {
       return;
     }
     created = true;
-    console.log(`[terminal] sessão ${short(s.id)} aberta por ${ip}`);
+    console.log(`[terminal] sessão ${short(s.id)} aberta por ${ip}${inicial ? ` para "${inicial}"` : ''}`);
+    // O bash lê a linha assim que termina de subir.
+    if (inicial) s.proc.write(`${inicial}\r`);
   } else {
     console.log(`[terminal] ${ip} conectou na sessão ${short(s.id)}`);
   }

@@ -440,7 +440,7 @@ function previewResult(content: unknown): string {
 
 function describeError(code: string): string {
   const map: Record<string, string> = {
-    authentication_failed: 'Falha de autenticação com o Claude — confira o CLAUDE_CODE_OAUTH_TOKEN no Railway.',
+    authentication_failed: 'Falha de autenticação com o Claude — entre de novo com a conta em Contas, no menu.',
     oauth_org_not_allowed: 'A organização desse token não tem acesso ao Claude Code.',
     billing_error: 'Problema de cobrança na conta do Claude.',
     rate_limit: 'Limite de uso da assinatura atingido — tente de novo mais tarde.',

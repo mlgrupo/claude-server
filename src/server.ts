@@ -5,6 +5,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import {
   ErroDeAgente,
   agentesOcupados,
+  esquecerLimite,
   executarAgente,
   iniciarLimpezaDosAgentes,
   lerPedido,
@@ -22,7 +23,17 @@ import {
   requireJsonBody,
 } from './auth.js';
 import { brainHistory, initBrain, listBrainFiles, readBrainFile } from './brain.js';
-import { config, hasClaudeCredentials, validateConfig } from './config.js';
+import { config, validateConfig } from './config.js';
+import {
+  ErroDeConta,
+  claudeLogado,
+  ehIdDeConta,
+  ehProvedor,
+  iniciarContas,
+  listarContas,
+  removerConta,
+  usarConta,
+} from './contas.js';
 import {
   escritorioDisponivel,
   estadoDoEscritorio,
@@ -61,14 +72,13 @@ async function main(): Promise<void> {
     for (const p of problems) console.error(`[config] ${p}`);
     process.exit(1);
   }
-  if (!hasClaudeCredentials()) {
-    console.warn('[config] Nem CLAUDE_CODE_OAUTH_TOKEN nem ANTHROPIC_API_KEY definidos — o agente vai falhar ao autenticar.');
-  }
-
   await fs.mkdir(config.workspaceDir, { recursive: true });
   await fs.mkdir(config.appDir, { recursive: true });
   await initStore();
   await initBrain();
+  await iniciarContas();
+  if (!claudeLogado()) console.warn('[contas] Nenhuma conta do Claude em uso: entre por Contas, no menu do Habblaud.');
+  if (!config.agentesApiKey) console.warn('[agentes] AGENTES_ANTHROPIC_API_KEY não definida: os agentes recusam pedidos (503).');
 
   await fs.mkdir(config.agentesDir, { recursive: true });
   iniciarLimpezaDosAgentes();
@@ -130,7 +140,7 @@ async function main(): Promise<void> {
       model: config.model,
       effort: config.effort,
       brainReflect: config.brainReflect,
-      credentials: hasClaudeCredentials(),
+      credentials: claudeLogado(),
       running: runningCount(),
       terminal: config.terminalEnabled,
       terminals: terminalCount(),
@@ -269,6 +279,40 @@ async function main(): Promise<void> {
     });
   });
 
+  // Contas: os logins do Claude, do Codex e do Gemini, e qual está em uso.
+  const contasComAgentes = async () => ({
+    ...(await listarContas()),
+    agentes: { credencial: config.agentesApiKey ? 'chave_da_api' : 'sem_chave' },
+  });
+  const lerAlvo = (req: Request) => {
+    const provedor = String(req.params.provedor);
+    const id = String(req.params.id);
+    if (!ehProvedor(provedor) || !ehIdDeConta(id)) throw new ErroDeConta(404, 'conta não encontrada');
+    return { provedor, id };
+  };
+  api.get('/contas', asyncRoute(async (_req, res) => res.json(await contasComAgentes())));
+  api.post(
+    '/contas/:provedor/:id/usar',
+    asyncRoute(async (req, res) => {
+      const { provedor, id } = lerAlvo(req);
+      // O chat no meio de uma tarefa passaria a gastar a outra conta.
+      if (provedor === 'claude' && runningCount() > 0) {
+        throw new ErroDeConta(409, 'espere as tarefas do chat terminarem para trocar a conta do Claude');
+      }
+      await usarConta(provedor, id);
+      if (provedor === 'claude') esquecerLimite();
+      res.json(await contasComAgentes());
+    }),
+  );
+  api.delete(
+    '/contas/:provedor/:id',
+    asyncRoute(async (req, res) => {
+      const { provedor, id } = lerAlvo(req);
+      await removerConta(provedor, id);
+      res.json(await contasComAgentes());
+    }),
+  );
+
   app.use('/api', api);
 
   // Escritório: com o login do Habblaud, entra no domínio do escritório sem pedir senha de novo.
@@ -289,7 +333,7 @@ async function main(): Promise<void> {
   app.use(express.static(PUBLIC_DIR, { index: 'index.html', maxAge: '5m' }));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+    if (err instanceof HttpError || err instanceof ErroDeConta) return res.status(err.status).json({ error: err.message });
     // Corpo que não é JSON ou passou do limite: erro de quem chamou, não do servidor.
     const tipo = (err as { type?: string } | null)?.type;
     if (tipo === 'entity.parse.failed') return res.status(400).json({ error: 'corpo não é JSON válido', erro: 'json_invalido' });

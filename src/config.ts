@@ -51,8 +51,11 @@ export const config = {
   agentesDir: path.resolve(env('AGENTES_DIR') ?? path.join(dataDir, 'agentes')),
   agentesMaxSimultaneos: num('AGENTES_MAX_SIMULTANEOS', 8),
   agentesFilaMaxima: num('AGENTES_FILA_MAXIMA', 60),
-  agentesLimiteAutomatico: fracao('AGENTES_LIMITE_AUTOMATICO', 0.7),
-  agentesLimiteTela: fracao('AGENTES_LIMITE_TELA', 0.95),
+  /**
+   * Chave da API da Anthropic só dos agentes (o HofOS e outros sistemas). As
+   * assinaturas em Contas são das pessoas da equipe, para o chat e o terminal.
+   */
+  agentesApiKey: env('AGENTES_ANTHROPIC_API_KEY'),
   agentesRetencaoDias: num('AGENTES_RETENCAO_DIAS', 3),
   /** Tokens de sistemas que só chamam os agentes: "hofos:<token>,outro:<token>". */
   clientTokens: lerTokensDeClientes(env('CLIENT_TOKENS')),
@@ -67,11 +70,6 @@ export const config = {
   appUrl: env('APP_URL')?.replace(/\/+$/, '') ?? (env('RAILWAY_PUBLIC_DOMAIN') ? `https://${env('RAILWAY_PUBLIC_DOMAIN')}` : undefined),
 };
 
-function fracao(name: string, fallback: number): number {
-  const n = Number(env(name));
-  return n > 0 && n <= 1 ? n : fallback;
-}
-
 function lerTokensDeClientes(raw: string | undefined): Map<string, string> {
   const mapa = new Map<string, string>();
   for (const par of (raw ?? '').split(',')) {
@@ -85,7 +83,7 @@ function lerTokensDeClientes(raw: string | undefined): Map<string, string> {
 }
 
 /** Variáveis que só o servidor precisa — nunca vão para o processo do agente. */
-export const SERVER_ONLY_SECRETS = ['APP_PASSWORD', 'API_TOKEN', 'SESSION_SECRET', 'CLIENT_TOKENS'];
+export const SERVER_ONLY_SECRETS = ['APP_PASSWORD', 'API_TOKEN', 'SESSION_SECRET', 'CLIENT_TOKENS', 'AGENTES_ANTHROPIC_API_KEY'];
 
 export function agentEnv(): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...process.env };
@@ -103,8 +101,4 @@ export function validateConfig(): string[] {
     if (config.apiToken && token === config.apiToken) problems.push(`CLIENT_TOKENS: o token de "${nome}" não pode ser o API_TOKEN.`);
   }
   return problems;
-}
-
-export function hasClaudeCredentials(): boolean {
-  return Boolean(env('CLAUDE_CODE_OAUTH_TOKEN') || env('ANTHROPIC_API_KEY'));
 }

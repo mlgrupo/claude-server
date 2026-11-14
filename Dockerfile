@@ -48,6 +48,18 @@ RUN apt-get update \
  # O Claude Code recusa o modo bypass como root: o agente roda como "node", com sudo sem senha.
  && echo "node ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/node && chmod 0440 /etc/sudoers.d/node
 
+# Codex (OpenAI) e Gemini CLI (Google) no terminal, cada pessoa com a própria conta (tela Contas).
+# Versões fixas: atualizar é trocar aqui. O Gemini não se atualiza sozinho (padrão do sistema).
+ARG CODEX_VERSION=0.169.0
+ARG GEMINI_CLI_VERSION=0.68.0
+RUN npm install -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
+ && npm cache clean --force \
+ && mkdir -p /etc/gemini-cli \
+ && echo '{"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false}}' > /etc/gemini-cli/system-defaults.json \
+ # habblaud-conta: login de outra conta pelo terminal (ver src/conta-cli.ts).
+ && printf '#!/bin/sh\nexec node /app/dist/conta-cli.js "$@"\n' > /usr/local/bin/habblaud-conta \
+ && chmod 0755 /usr/local/bin/habblaud-conta
+
 ENV NODE_ENV=production \
     PORT=3000 \
     DATA_DIR=/data \

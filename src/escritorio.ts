@@ -36,6 +36,10 @@ function pastaDoClaude(): string {
   return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
 }
 
+function pastaDoCodex(): string {
+  return process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+}
+
 function pastaDeDados(): string {
   return path.join(config.dataDir, 'escritorio');
 }
@@ -91,7 +95,9 @@ function subir(): void {
     HABBLAUD_LANG: 'pt-BR',
     HABBLAUD_WORLD: '0',
     HABBLAUD_UPDATE_CHECK: '0',
-    HABBLAUD_CODEX: '0',
+    // As sessões do Codex no terminal também aparecem (só leitura).
+    HABBLAUD_CODEX: '1',
+    HABBLAUD_CODEX_DIRS: pastaDoCodex(),
     HABBLAUD_TERMINAL: '0',
     HABBLAUD_MENSAGENS: '0',
     HABBLAUD_PTY: '0',
@@ -223,6 +229,17 @@ export function pararEscritorio(): void {
 const janelas = new Map<string, { utilization: number; resets_at?: number }>();
 let gravando: Promise<void> = Promise.resolve();
 
+function arquivoDeUso(): string {
+  return path.join(pastaDeUso(), `${path.basename(pastaDoClaude())}.json`);
+}
+
+/** Trocou a conta do Claude: o uso mostrado era da conta anterior. */
+export function esquecerUsoNoEscritorio(): void {
+  janelas.clear();
+  const arquivo = arquivoDeUso();
+  gravando = gravando.then(() => fs.rm(arquivo, { force: true })).catch(() => undefined);
+}
+
 /** As janelas do evento: `unifiedWindows` ({five_hour: {utilization, resetsAt}, ...}) e, se vier, a do topo. */
 export function janelasDoEvento(info: Record<string, unknown>): Array<[string, number, number | undefined]> {
   const saida: Array<[string, number, number | undefined]> = [];
@@ -248,7 +265,7 @@ export function registrarUsoNoEscritorio(info: Record<string, unknown> | undefin
   }
   if (!mudou) return;
   const dir = pastaDoClaude();
-  const arquivo = path.join(pastaDeUso(), `${path.basename(dir)}.json`);
+  const arquivo = arquivoDeUso();
   const conteudo = JSON.stringify({
     accountId: path.basename(dir),
     configDir: dir,

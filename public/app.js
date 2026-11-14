@@ -14,7 +14,7 @@ const state = {
   run: null, // execução que o botão Parar controla
   streams: new Set(), // EventSources abertos
   running: new Set(),
-  view: 'chat', // 'chat' | 'terminal'
+  view: 'chat', // 'chat' | 'terminal' | 'agentes' | 'contas'
 };
 
 const BRAIN_ICON =
@@ -345,6 +345,8 @@ async function openConversation(id) {
 
 function route() {
   closeNav();
+  // O "Voltar para Contas" do terminal só vale enquanto se está no login.
+  if (location.hash !== '#/terminal') term.fromAccounts = false;
   // Veio de /escritorio sem login: depois de entrar, segue para o escritório.
   if (location.hash === '#/escritorio') {
     history.replaceState(null, '', '/');
@@ -353,6 +355,7 @@ function route() {
   }
   if (location.hash === '#/terminal') return showTerminal();
   if (location.hash === '#/agentes') return showAgents();
+  if (location.hash === '#/contas') return showAccounts();
   if (state.view !== 'chat') {
     setView('chat');
     $('#conv-title').textContent = 'Nova tarefa';
@@ -469,7 +472,10 @@ const TERM_THEME = {
   brightBlack: '#5B7882', brightRed: '#F08A9B', brightGreen: '#86D9AE', brightYellow: '#F3C86A',
   brightBlue: '#A3C3F7', brightMagenta: '#D9B3EF', brightCyan: '#7FD3E0', brightWhite: '#FFFFFF',
 };
-const term = { xterm: null, fit: null, ws: null, sessionId: null, ended: false, killing: false, retry: 0, retryTimer: 0, ctrl: false };
+const term = {
+  xterm: null, fit: null, ws: null, sessionId: null, ended: false, killing: false, retry: 0, retryTimer: 0, ctrl: false,
+  pendingCmd: null, // login de conta: o terminal novo já abre rodando o comando
+};
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -582,11 +588,12 @@ async function createTerminal() {
   term.xterm = x;
 }
 
-function termConnect(fresh) {
+function termConnect(fresh, cmd) {
   clearTimeout(term.retryTimer);
   const x = term.xterm;
   const qs = new URLSearchParams({ cols: String(x.cols), rows: String(x.rows) });
-  if (fresh) qs.set('new', '1');
+  if (cmd) qs.set('cmd', cmd);
+  else if (fresh) qs.set('new', '1');
   else if (term.sessionId) qs.set('session', term.sessionId);
   const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/terminal?${qs}`);
   term.ws = ws;
@@ -612,7 +619,7 @@ function termConnect(fresh) {
       return;
     }
     if (c.type === 'session') {
-      const lost = term.sessionId && term.sessionId !== c.id;
+      const lost = term.sessionId && term.sessionId !== c.id && !cmd;
       term.sessionId = c.id;
       x.reset(); // o servidor reenvia a tela recente logo em seguida
       if (lost) x.write('\x1b[2m[A sessão anterior terminou (o servidor pode ter reiniciado). Este é um terminal novo.]\x1b[0m\r\n');
@@ -660,6 +667,7 @@ function setView(view) {
   state.view = view;
   const isTerm = view === 'terminal';
   const isAgents = view === 'agentes';
+  const isAccounts = view === 'contas';
   const isChat = view === 'chat';
   $('#scroller').hidden = !isChat;
   $('#composer').hidden = !isChat;
@@ -668,10 +676,13 @@ function setView(view) {
   $('#term-actions').hidden = !isTerm;
   $('#term-keys').hidden = !(isTerm && coarse);
   $('#agents-view').hidden = !isAgents;
+  $('#accounts-view').hidden = !isAccounts;
   $('#open-term').classList.toggle('active', isTerm);
   $('#open-agents').classList.toggle('active', isAgents);
+  $('#open-accounts').classList.toggle('active', isAccounts);
   if (isTerm) $('#conv-title').textContent = 'Terminal';
   if (isAgents) $('#conv-title').textContent = 'Agentes';
+  if (isAccounts) $('#conv-title').textContent = 'Contas';
   if (!isAgents) closeAgentsStream();
   renderConvList();
 }
@@ -744,19 +755,21 @@ function renderAgents() {
     const janela = a.tipo === 'five_hour' ? 'da janela de 5 h' : a.tipo === 'seven_day' ? 'da semana' : 'da janela';
     $('#agents-usage').textContent = `${pct}% ${janela}`;
     meter.style.width = `${Math.min(100, pct)}%`;
-    meter.className = a.utilizacao >= a.tetoAutomatico ? 'warn' : '';
+    meter.className = a.utilizacao >= 0.9 ? 'warn' : '';
     const renova = a.renovaEm
       ? ` Renova ${new Date(a.renovaEm).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.`
       : '';
-    $('#agents-usage-note').textContent =
-      a.utilizacao >= a.tetoAutomatico
-        ? `Acima de ${Math.round(a.tetoAutomatico * 100)}%: os pedidos automáticos voltam para a API do sistema que chamou.${renova}`
-        : `Pedidos automáticos param em ${Math.round(a.tetoAutomatico * 100)}%; os de tela, em ${Math.round(a.tetoTela * 100)}%.${renova}`;
+    $('#agents-usage-note').textContent = `Conta do Claude em uso no chat e no terminal (troque em Contas).${renova}`;
   } else {
     $('#agents-usage').textContent = 'sem leitura ainda';
     meter.style.width = '0';
-    $('#agents-usage-note').textContent = 'O uso aparece depois do primeiro pedido.';
+    $('#agents-usage-note').textContent = 'O uso aparece depois da primeira tarefa no chat.';
   }
+  $('#agents-cred').textContent =
+    d.credencial === 'chave_da_api'
+      ? 'Os agentes rodam com a chave da API, sem gastar a assinatura da equipe.'
+      : 'Agentes parados: falta a chave da API (AGENTES_ANTHROPIC_API_KEY no Railway). Enquanto isso, o HofOS segue pela API dele.';
+  $('#agents-cred').classList.toggle('agents-alert', d.credencial !== 'chave_da_api');
 
   // Escritório
   const office = d.escritorio || {};
@@ -834,6 +847,10 @@ function renderAgentsTimers() {
 
 async function showTerminal() {
   setView('terminal');
+  const cmd = term.pendingCmd;
+  term.pendingCmd = null;
+  $('#term-back').hidden = !(cmd || term.fromAccounts);
+  if (cmd) term.fromAccounts = true;
   try {
     await ensureTerminal();
   } catch (err) {
@@ -842,11 +859,121 @@ async function showTerminal() {
   }
   if (state.view !== 'terminal') return;
   fitTerm();
-  if (!term.ws && !term.ended) {
+  if (cmd) {
+    // Login de conta: terminal novo, já rodando o comando (o anterior continua vivo no servidor).
+    termDisconnect();
+    term.sessionId = null;
+    term.retry = 0;
+    term.xterm.reset();
+    termConnect(true, cmd);
+  } else if (!term.ws && !term.ended) {
     clearTimeout(term.retryTimer);
     termConnect(false);
   }
   term.xterm.focus();
+}
+
+// ---------------------------------------------------------------- Contas
+const ACCOUNT_USE = {
+  claude: 'Chat e terminal (comando claude).',
+  codex: 'Terminal (comando codex). As sessões aparecem no escritório.',
+  gemini: 'Terminal (comando gemini).',
+};
+let accountsBusy = false;
+
+async function showAccounts() {
+  setView('contas');
+  term.fromAccounts = false;
+  $('#accounts-error').textContent = '';
+  try {
+    renderAccounts(await api('/contas'));
+  } catch (err) {
+    $('#accounts-error').textContent = err.message;
+  }
+}
+
+async function accountAction(path, opts, btn) {
+  if (accountsBusy) return;
+  accountsBusy = true;
+  $('#accounts-error').textContent = '';
+  const label = btn.textContent;
+  btn.disabled = true;
+  if (btn.classList.contains('btn-line')) btn.textContent = 'Trocando…';
+  try {
+    renderAccounts(await api(path, opts));
+  } catch (err) {
+    $('#accounts-error').textContent = err.message;
+    btn.disabled = false;
+    btn.textContent = label;
+  } finally {
+    accountsBusy = false;
+  }
+}
+
+function renderAccounts(data) {
+  if (state.view !== 'contas') return;
+  const list = $('#accounts-list');
+  list.removeAttribute('aria-busy');
+  list.replaceChildren();
+  $('#accounts-agents').textContent =
+    data.agentes?.credencial === 'chave_da_api'
+      ? 'Os agentes do HofOS não usam estas contas: rodam com a chave da API.'
+      : 'Os agentes do HofOS não usam estas contas. Eles precisam de uma chave da API (AGENTES_ANTHROPIC_API_KEY no Railway); sem ela, o HofOS segue pela API dele.';
+
+  for (const p of ['claude', 'codex', 'gemini']) {
+    const tool = data[p];
+    if (!tool) continue;
+    const card = el('section', 'acct-tool');
+    const head = el('header', 'acct-head');
+    head.append(el('h3', null, tool.nome), el('p', 'acct-where', ACCOUNT_USE[p]));
+    card.append(head);
+
+    const rows = el('ul', 'acct-rows');
+    const ordered = [...tool.contas].sort((a, b) => (b.id === tool.ativa) - (a.id === tool.ativa));
+    if (!ordered.length) rows.append(el('li', 'acct-empty', tool.instalado ? 'Nenhuma conta ainda.' : 'Não instalado neste servidor.'));
+    for (const c of ordered) {
+      const active = c.id === tool.ativa;
+      const who = c.email || c.nome || 'Conta sem e-mail';
+      const li = el('li', active ? 'acct-row active' : 'acct-row');
+      const info = el('div', 'acct-who');
+      info.append(el('span', 'acct-email', who));
+      if (c.plano) info.append(el('span', 'acct-plan', c.plano));
+      li.append(info);
+      if (active) {
+        li.append(el('span', 'acct-badge', 'Em uso'));
+      } else {
+        const use = el('button', 'btn-line', 'Usar esta');
+        use.type = 'button';
+        use.addEventListener('click', () => accountAction(`/contas/${p}/${c.id}/usar`, { method: 'POST', body: '{}' }, use));
+        const del = el('button', 'icon-btn acct-del');
+        del.type = 'button';
+        del.innerHTML = TRASH_ICON;
+        del.setAttribute('aria-label', `Remover ${who}`);
+        del.title = 'Remover do servidor';
+        del.addEventListener('click', () => {
+          if (!confirm(`Remover ${who} do ${tool.nome} neste servidor? Para usar de novo, será preciso entrar outra vez.`)) return;
+          accountAction(`/contas/${p}/${c.id}`, { method: 'DELETE' }, del);
+        });
+        li.append(use, del);
+      }
+      rows.append(li);
+    }
+    card.append(rows);
+
+    if (tool.instalado) {
+      const add = el('button', 'btn-primary acct-add', ordered.length ? 'Entrar com outra conta' : 'Entrar com uma conta');
+      add.type = 'button';
+      add.addEventListener('click', () => {
+        term.pendingCmd = `entrar-${p}`;
+        location.hash = '#/terminal';
+      });
+      card.append(add);
+    }
+    if (p === 'claude' && ordered.length > 1) {
+      card.append(el('p', 'acct-note', 'Depois de trocar, quem estiver com o Claude aberto no terminal precisa fechar e abrir de novo.'));
+    }
+    list.append(card);
+  }
 }
 
 // ---------------------------------------------------------------- Navegação mobile
@@ -962,6 +1089,7 @@ $('#brain').addEventListener('click', (ev) => {
   if (ev.target === ev.currentTarget) ev.currentTarget.close();
 });
 $('#open-term').addEventListener('click', closeNav);
+$('#open-accounts').addEventListener('click', closeNav);
 $('#term-kill').addEventListener('click', () => {
   if (!confirm('Encerrar o terminal? Os comandos que estiverem rodando nele serão finalizados.')) return;
   term.killing = true;
