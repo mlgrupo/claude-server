@@ -85,11 +85,16 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   res.status(401).json({ error: 'não autenticado' });
 }
 
-/** Bloqueia POST/DELETE vindos de formulários de outros sites (CSRF) quando a auth é por cookie. */
+/**
+ * Bloqueia POST/DELETE vindos de formulários de outros sites (CSRF) quando a auth é por cookie.
+ * Confere o cabeçalho, não o corpo: o navegador manda DELETE sem corpo, e `req.is()` devolve
+ * null quando não há corpo — o botão de apagar conversa caía aqui. Outro site não consegue
+ * mandar `Content-Type: application/json` sem preflight de CORS, que este servidor nunca libera.
+ */
 export function requireJsonBody(req: Request, res: Response, next: NextFunction): void {
   if (req.method === 'GET' || req.method === 'HEAD') return next();
   if (req.headers.authorization?.startsWith('Bearer ')) return next();
-  if (req.is('application/json')) return next();
+  if (/^application\/json\b/i.test(req.headers['content-type'] ?? '')) return next();
   res.status(415).json({ error: 'use Content-Type: application/json' });
 }
 
