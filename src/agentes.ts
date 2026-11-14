@@ -45,10 +45,11 @@ const AGENTES_PADRAO: Agente[] = [
   {
     id: 'rapido',
     nome: 'Agente rápido',
-    descricao: 'Classificações, temperatura, extrações e JSON curtos: responde e encerra.',
+    descricao: 'Análises de conversa, temperatura, comprovantes, posts do Instagram e JSON curtos: responde e encerra.',
     modelo: 'haiku',
     esforco: 'low',
-    simultaneos: 4,
+    // É o que mais recebe (milhares de análises por dia): mais vagas.
+    simultaneos: 6,
     limiteSegundos: 120,
   },
   {
@@ -137,15 +138,21 @@ export function listaDeAgentes(): Agente[] {
  * Qual agente atende, pela função do produto que chamou (o rótulo `feature`
  * do HofOS). O pedido explícito vence; função sem regra vai pelo porte.
  */
+// Quem atende cada função do HofOS. Volume alto (uma chamada por lead, por
+// mensagem ou por post) vai para o rápido (Haiku), que custa menos que o
+// gpt-4o-mini de hoje; o Sonnet fica com o que é raro e pede texto bom.
 const AGENTE_PELA_FUNCAO: Array<[RegExp, string]> = [
   [/^suporte\.agente$/, 'hofos-ai'],
   [/^video\./, 'editor-de-video'],
-  [/^(roteiros\.|marketing\.|deals\.relatorio$|playbook\.|raio_x$|trilha\.|esteira\.sugestoes$)/, 'estrategista'],
+  [/^(roteiros\.|marketing\.|deals\.relatorio$|trilha\.|esteira\.sugestoes$)/, 'estrategista'],
   [
-    /^(conversa\.resumo$|analise_call$|ligacao\.resumo$|atendimento\.|posvendas\.|etapa\.(analisador|reanalise)$|cadencia\.sugestao$|suporte\.anexo$|piloto_perfil\.|trafego\.|treinamentos\.|simulador\.analise$|criativo\.julgamento$)/,
+    /^(conversa\.resumo$|analise_call$|ligacao\.resumo$|atendimento\.|posvendas\.|suporte\.anexo$|trafego\.|treinamentos\.|simulador\.analise$|criativo\.julgamento$)/,
     'analista',
   ],
-  [/^(cadencia\.|etapa\.classificador$|agendamento\.|comprovante\.|ofx\.|esteira\.slack$|suporte\.sonda$|workflow\.)/, 'rapido'],
+  [
+    /^(cadencia\.|etapa\.|agendamento\.|comprovante\.|piloto_perfil\.|raio_x$|playbook\.|ofx\.|esteira\.slack$|suporte\.sonda$|workflow\.)/,
+    'rapido',
+  ],
 ];
 
 export function escolherAgente(
@@ -156,9 +163,10 @@ export function escolherAgente(
   if (explicito) return explicito;
   const feature = pedido.feature ?? '';
   const regra = AGENTE_PELA_FUNCAO.find(([re]) => re.test(feature));
-  let id = regra ? regra[1] : pedido.nivel === 'forte' ? 'analista' : 'rapido';
-  // Pedido marcado como forte nunca cai no agente rápido.
-  if (id === 'rapido' && pedido.nivel === 'forte') id = 'analista';
+  // A tabela manda: o "nível" do HofOS vem do modelo que ele usaria na OpenAI
+  // (o comprovante pede gpt-4o) e mandaria para o Sonnet o que o Haiku resolve.
+  // Sem regra para a função, pedido forte nunca cai no rápido.
+  const id = regra ? regra[1] : pedido.nivel === 'forte' ? 'analista' : 'rapido';
   return mapa.get(id) ?? mapa.get('rapido') ?? [...mapa.values()][0];
 }
 
@@ -245,6 +253,11 @@ export interface PedidoDeAgente {
   feature: string;
   cliente: string;
   prazo: number;
+  /**
+   * Dado de cliente (clínica, paciente): a transcrição não fica gravada no
+   * servidor e o pedido não aparece no escritório, só no painel (assunto e empresa).
+   */
+  privado: boolean;
 }
 
 export interface RespostaDeAgente {
@@ -445,8 +458,11 @@ async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<Resposta
     const options: Options = {
       cwd,
       model: agente.modelo,
-      // O Haiku não tem nível de esforço: só manda para os outros.
-      ...(/haiku/i.test(agente.modelo) ? {} : { effort: agente.esforco }),
+      // O Haiku 5.5 aceita esforço (menos "pensar" = menos saída cobrada); modelo
+      // sem suporte ignora em silêncio.
+      effort: agente.esforco,
+      // Pedido com dado de cliente não deixa transcrição no disco do servidor.
+      ...(pedido.privado ? { persistSession: false } : {}),
       systemPrompt: pedido.sistema.trim() || 'Você é um assistente. Responda em português do Brasil.',
       tools: [],
       settingSources: [],
@@ -585,6 +601,7 @@ export function lerPedido(corpo: unknown, cliente: string, agora = Date.now()): 
     feature: texto(b.feature, 80),
     cliente,
     prazo: agora + limiteS * 1000,
+    privado: b.privado === true,
   };
 }
 

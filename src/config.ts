@@ -49,7 +49,7 @@ export const config = {
   // Agentes especializados (POST /api/v1/agentes/executar)
   agentesAjustes: env('AGENTES'),
   agentesDir: path.resolve(env('AGENTES_DIR') ?? path.join(dataDir, 'agentes')),
-  agentesMaxSimultaneos: num('AGENTES_MAX_SIMULTANEOS', 8),
+  agentesMaxSimultaneos: num('AGENTES_MAX_SIMULTANEOS', 10),
   agentesFilaMaxima: num('AGENTES_FILA_MAXIMA', 60),
   /**
    * Chave da API da Anthropic só dos agentes (o HofOS e outros sistemas). As

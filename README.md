@@ -98,8 +98,8 @@ Para outros sistemas usarem o Claude do servidor. Cada agente é um Claude Code 
 
 | Agente | Modelo | Para quê | Vagas | Teto |
 |---|---|---|---|---|
-| `rapido` | Haiku | temperatura, classificação, extrações e JSON curtos | 4 | 2 min |
-| `analista` | Sonnet | resumos e análises de conversa, call, atendimento | 3 | 5 min |
+| `rapido` | Haiku, esforço baixo | análises de conversa (cadência, etapa, temperatura), comprovantes, posts do Instagram (piloto de perfil), Raio-X, playbook | 6 | 2 min |
+| `analista` | Sonnet | resumos de call, atendimento, pós-vendas, tráfego, treinamentos | 3 | 5 min |
 | `estrategista` | Opus, esforço alto | roteiros, campanhas, newsletter, blog, relatórios | 2 | 10 min |
 | `hofos-ai` | Sonnet | o chat da equipe no HofOS | 3 | 5 min |
 | `editor-de-video` | Opus, esforço alto | plano e ajustes do editor de vídeo do HofOS | 2 | 10 min |
@@ -118,13 +118,13 @@ curl -X POST https://claude-server-production-bf2fccdc.up.railway.app/api/v1/age
   }'
 ```
 
-- **Quem atende:** `agente` explícito, senão pela função (`feature`, os rótulos do HofOS: `roteiros.*` → estrategista, `conversa.resumo` → analista, `cadencia.*` → rápido…), senão pelo porte (`nivel`: `rapido` | `forte`). Pedido forte nunca cai no rápido.
-- **Corpo:** `prompt` (obrigatório), `sistema`, `esquema` (JSON Schema: a resposta volta em `structured_output`), `imagens` (`[{mime, base64}]`, até 8 e 15 MB), `limiteSegundos`, `origem` (`tela` passa na frente de `automatico`), `assunto`, `empresa` (rótulos do painel; nunca o conteúdo).
+- **Quem atende:** `agente` explícito, senão pela função (`feature`, os rótulos do HofOS: `roteiros.*` → estrategista, `analise_call` → analista, `cadencia.*`, `etapa.*`, `comprovante.*`, `piloto_perfil.*` → rápido…), que vale mesmo com `nivel: forte`; função fora da tabela vai pelo porte (`nivel`: `rapido` | `forte`), e forte nunca cai no rápido. O volume alto fica no Haiku: pela API ele custa menos que o gpt-4o-mini.
+- **Corpo:** `prompt` (obrigatório), `sistema`, `esquema` (JSON Schema: a resposta volta em `structured_output`), `imagens` (`[{mime, base64}]`, até 8 e 15 MB), `limiteSegundos`, `origem` (`tela` passa na frente de `automatico`), `assunto`, `empresa` (rótulos do painel; nunca o conteúdo), `privado` (`true` para dado de cliente: a transcrição não fica gravada no servidor e o pedido não aparece no escritório).
 - **Resposta (200):** `{ id, agente, modelo, esperaMs, duracaoMs, eventos }`. `eventos` são os mesmos do `claude -p --output-format stream-json`: `system/init`, `rate_limit_event` e `result` (com `result`, `structured_output` e `usage`).
 - **Credencial:** os agentes rodam com a chave da API da Anthropic em `AGENTES_ANTHROPIC_API_KEY`, nunca com as assinaturas da tela Contas (a chave vem antes do login no Claude Code). Sem a chave, todo pedido volta na hora com **503** `sem_chave_da_api`, e quem chamou segue pelo caminho dele.
 - **Sem vaga agora (429):** `fila_cheia` ou `fila_demorada`. Siga pelo seu caminho (API, outra fila). A fila automática de cada agente aceita até 2× as vagas.
 - **Tokens:** `CLIENT_TOKENS=hofos:<token>,outro:<token>` (24+ caracteres cada). Um token de sistema só chama `/api/v1/agentes/*` — nada de chat, terminal ou arquivos. A senha e o `API_TOKEN` também servem.
-- **Ajustes sem deploy de código:** `AGENTES='{"estrategista":{"modelo":"sonnet"},"rapido":{"simultaneos":6}}'` (campos: `nome`, `descricao`, `modelo`, `esforco`, `simultaneos`, `limiteSegundos`; um id novo cria um agente). `AGENTES_MAX_SIMULTANEOS` (8) limita o total de Claude Codes rodando.
+- **Ajustes sem deploy de código:** `AGENTES='{"estrategista":{"modelo":"sonnet"},"rapido":{"simultaneos":6}}'` (campos: `nome`, `descricao`, `modelo`, `esforco`, `simultaneos`, `limiteSegundos`; um id novo cria um agente). `AGENTES_MAX_SIMULTANEOS` (10) limita o total de Claude Codes rodando.
 - **Painel:** a tela **Agentes** da interface mostra quem está trabalhando, a fila, os números do dia, a credencial dos agentes e o uso da assinatura da equipe no chat (`GET /api/v1/agentes` devolve o mesmo em JSON). As transcrições dos agentes ficam `AGENTES_RETENCAO_DIAS` (3) dias.
 
 ## Escritório (Habblaud)
