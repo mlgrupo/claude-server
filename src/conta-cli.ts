@@ -11,6 +11,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import readline from 'node:readline';
 import {
+  ARQUIVO_DA_CHAVE_DO_GEMINI,
   NOMES,
   PROVEDORES,
   type Provedor,
@@ -47,6 +48,22 @@ function perguntar(texto: string): Promise<string> {
       resolve(resposta.trim());
     });
   });
+}
+
+/** Confere a chave da API do Gemini listando os modelos. Devolve o problema, ou null se a chave vale. */
+async function conferirChaveDoGemini(chave: string): Promise<string | null> {
+  try {
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=1', {
+      // No cabeçalho, não na URL: a chave não vai parar em log de ninguém.
+      headers: { 'x-goog-api-key': chave },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (r.ok) return null;
+    const corpo = (await r.json().catch(() => null)) as { error?: { message?: string } } | null;
+    return corpo?.error?.message ?? `o Google respondeu ${r.status}`;
+  } catch (err) {
+    return `sem resposta do Google (${(err as Error).message})`;
+  }
 }
 
 /** Lê uma linha sem mostrar o que é digitado (chave da API). Ctrl+C desiste. */
@@ -123,14 +140,35 @@ async function entrar(p: Provedor): Promise<number> {
       }
     } else {
       await fs.mkdir(path.join(pasta, '.gemini'), { recursive: true, mode: 0o700 });
-      await fs.writeFile(
-        path.join(pasta, '.gemini', 'settings.json'),
-        JSON.stringify({ security: { auth: { selectedType: 'oauth-personal' } } }, null, 2),
-        { mode: 0o600 },
-      );
-      console.log('Abra o link que vai aparecer, entre com a conta Google e cole aqui o código de autorização.');
-      console.log(`Quando o Gemini abrir já logado, digite ${negrito('/quit')} para terminar.\n`);
-      codigo = await rodar(bin, [], { ...process.env, GEMINI_CLI_HOME: pasta, NO_BROWSER: 'true', GEMINI_API_KEY: undefined }, pasta);
+      console.log('Como quer entrar?');
+      console.log(`  1) Chave da API do Gemini ${fraco('(crie em https://aistudio.google.com/app/apikey)')}`);
+      console.log(`  2) Conta Google ${fraco('(só com o Gemini Code Assist pago: o Google encerrou o login gratuito no Gemini CLI)')}`);
+      const modo = (await perguntar('Escolha [1]: ')) || '1';
+      if (modo !== '2') {
+        const chave = await perguntarOculto('Cole a chave (não aparece na tela): ');
+        if (!chave) {
+          console.error(vermelho('Nenhuma chave informada.'));
+          return 1;
+        }
+        process.stdout.write('Conferindo a chave com o Google… ');
+        const problema = await conferirChaveDoGemini(chave);
+        if (problema) {
+          console.error(vermelho(`recusada: ${problema}`));
+          return 1;
+        }
+        console.log(verde('ok'));
+        await fs.writeFile(path.join(pasta, '.gemini', ARQUIVO_DA_CHAVE_DO_GEMINI), chave, { mode: 0o600 });
+        codigo = 0;
+      } else {
+        await fs.writeFile(
+          path.join(pasta, '.gemini', 'settings.json'),
+          JSON.stringify({ security: { auth: { selectedType: 'oauth-personal' } } }, null, 2),
+          { mode: 0o600 },
+        );
+        console.log('\nAbra o link que vai aparecer, entre com a conta Google e cole aqui o código de autorização.');
+        console.log(`Quando o Gemini abrir já logado, digite ${negrito('/quit')} para terminar.\n`);
+        codigo = await rodar(bin, [], { ...process.env, GEMINI_CLI_HOME: pasta, NO_BROWSER: 'true', GEMINI_API_KEY: undefined }, pasta);
+      }
     }
 
     const origem = origemDoLogin(p, pasta);

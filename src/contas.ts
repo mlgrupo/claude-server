@@ -5,7 +5,8 @@
 // Cada ferramenta continua lendo o login do lugar de sempre (a "pasta viva"):
 //   Claude  ~/.claude/.credentials.json + "oauthAccount" do ~/.claude.json
 //   Codex   ~/.codex/auth.json
-//   Gemini  ~/.gemini/oauth_creds.json + google_accounts.json
+//   Gemini  ~/.gemini/habblaud-api-key (chave da API, via bin/gemini) ou
+//           ~/.gemini/oauth_creds.json + google_accounts.json (conta Google)
 // As outras contas ficam guardadas em DATA_DIR/contas/<ferramenta>/<id>/. Trocar
 // = guardar a conta viva (os tokens dela renovam com o uso) e pôr a escolhida
 // no lugar. Sessões, configurações e skills ficam como estão.
@@ -64,10 +65,17 @@ interface Origem {
   configGlobal?: string;
 }
 
+/**
+ * Chave da API do Gemini da conta em uso. O bin/gemini a passa como
+ * GEMINI_API_KEY: o armazenamento do próprio Gemini criptografa com o nome da
+ * máquina, que muda a cada deploy no Railway.
+ */
+export const ARQUIVO_DA_CHAVE_DO_GEMINI = 'habblaud-api-key';
+
 const ARQUIVOS: Record<Provedor, string[]> = {
   claude: ['.credentials.json'],
   codex: ['auth.json'],
-  gemini: ['oauth_creds.json', 'google_accounts.json'],
+  gemini: ['oauth_creds.json', 'google_accounts.json', ARQUIVO_DA_CHAVE_DO_GEMINI],
 };
 
 export const NOMES: Record<Provedor, string> = { claude: 'Claude', codex: 'Codex', gemini: 'Gemini' };
@@ -228,9 +236,27 @@ export function identificar(p: Provedor, o: Origem): Identidade | null {
   }
   const cred = lerJson(path.join(o.pasta, 'oauth_creds.json'));
   const token = str(cred?.refresh_token) ?? str(cred?.access_token);
+  const chaveDaApi = lerTexto(path.join(o.pasta, ARQUIVO_DA_CHAVE_DO_GEMINI));
+  const tipo = str(obj(obj(lerJson(path.join(o.pasta, 'settings.json'))?.security)?.auth)?.selectedType);
+  if (chaveDaApi && (tipo === 'gemini-api-key' || !token)) {
+    return {
+      chave: `apikey:${resumo(chaveDaApi)}`,
+      email: null,
+      nome: `Chave da API …${chaveDaApi.slice(-4)}`,
+      plano: 'Chave da API (AI Studio)',
+    };
+  }
   if (!cred || !token) return null;
   const email = str(lerJson(path.join(o.pasta, 'google_accounts.json'))?.active) ?? str(corpoDoJwt(cred.id_token)?.email);
   return { chave: email ?? resumo(token), email, nome: null, plano: 'Conta Google' };
+}
+
+function lerTexto(arquivo: string): string | null {
+  try {
+    return str(readFileSync(arquivo, 'utf8'));
+  } catch {
+    return null;
+  }
 }
 
 function idDe(p: Provedor, ident: Identidade): string {
@@ -409,14 +435,15 @@ export function usarConta(p: Provedor, id: string): Promise<ContaSalva> {
     }
 
     if (p === 'gemini') {
-      // O login do Google só vale com o Gemini configurado para ele.
+      // O Gemini usa o tipo de login escolhido no settings.json: chave da API ou conta Google.
+      const tipo = existsSync(path.join(pasta, ARQUIVO_DA_CHAVE_DO_GEMINI)) ? 'gemini-api-key' : 'oauth-personal';
       const arquivo = path.join(viva.pasta, 'settings.json');
       const atual = existsSync(arquivo) ? lerJson(arquivo) : {};
       if (atual) {
         const seguranca = obj(atual.security) ?? {};
         const auth = obj(seguranca.auth) ?? {};
-        if (auth.selectedType !== 'oauth-personal') {
-          auth.selectedType = 'oauth-personal';
+        if (auth.selectedType !== tipo) {
+          auth.selectedType = tipo;
           seguranca.auth = auth;
           atual.security = seguranca;
           await gravarAtomico(arquivo, JSON.stringify(atual, null, 2));

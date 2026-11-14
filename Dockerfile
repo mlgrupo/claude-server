@@ -50,15 +50,14 @@ RUN apt-get update \
 
 # Codex (OpenAI) e Gemini CLI (Google) no terminal, cada pessoa com a própria conta (tela Contas).
 # Versões fixas: atualizar é trocar aqui. O Gemini não se atualiza sozinho (padrão do sistema).
+# O comando `gemini` vira o bin/gemini deste repositório (lê a chave da conta em uso).
 ARG CODEX_VERSION=0.169.0
 ARG GEMINI_CLI_VERSION=0.68.0
 RUN npm install -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}" "@google/gemini-cli@${GEMINI_CLI_VERSION}" \
  && npm cache clean --force \
+ && rm /usr/local/bin/gemini \
  && mkdir -p /etc/gemini-cli \
- && echo '{"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false}}' > /etc/gemini-cli/system-defaults.json \
- # habblaud-conta: login de outra conta pelo terminal (ver src/conta-cli.ts).
- && printf '#!/bin/sh\nexec node /app/dist/conta-cli.js "$@"\n' > /usr/local/bin/habblaud-conta \
- && chmod 0755 /usr/local/bin/habblaud-conta
+ && echo '{"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false}}' > /etc/gemini-cli/system-defaults.json
 
 ENV NODE_ENV=production \
     PORT=3000 \
@@ -78,6 +77,8 @@ COPY public ./public
 COPY brain-template ./brain-template
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# habblaud-conta (login de outra conta) e o invólucro do gemini.
+COPY --chmod=0755 bin/gemini bin/habblaud-conta /usr/local/bin/
 # O servidor do Habblaud não tem dependência de runtime: basta o dist/ e o package.json.
 COPY --from=escritorio /src/dist /opt/habblaud/dist
 COPY --from=escritorio /src/package.json /opt/habblaud/package.json

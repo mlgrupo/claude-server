@@ -1,0 +1,3 @@
+#!/bin/sh
+# Login de outra conta do Claude, do Codex ou do Gemini pelo terminal (ver src/conta-cli.ts).
+exec node /app/dist/conta-cli.js "$@"

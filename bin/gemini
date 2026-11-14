@@ -1,0 +1,14 @@
+#!/bin/sh
+# Gemini CLI com a conta em uso da tela Contas.
+#
+# Conta de chave da API: a chave fica em ~/.gemini/habblaud-api-key (600) e
+# entra como GEMINI_API_KEY, que o Gemini lê antes de qualquer outra. O
+# armazenamento do próprio Gemini não serve aqui: ele criptografa com o nome
+# da máquina, que muda a cada deploy. Conta Google: o arquivo não existe e o
+# Gemini usa o oauth_creds.json de sempre.
+CHAVE="${GEMINI_CLI_HOME:-$HOME}/.gemini/habblaud-api-key"
+if [ -z "$GEMINI_API_KEY" ] && [ -r "$CHAVE" ]; then
+  GEMINI_API_KEY=$(cat "$CHAVE")
+  export GEMINI_API_KEY
+fi
+exec node /usr/local/lib/node_modules/@google/gemini-cli/bundle/gemini.js "$@"
