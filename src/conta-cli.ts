@@ -88,6 +88,7 @@ async function entrar(p: Provedor): Promise<number> {
     return 1;
   }
   await fs.mkdir(pastaDosLogins(), { recursive: true, mode: 0o700 });
+  await limparSobras();
   const pasta = path.join(pastaDosLogins(), `${p}-${crypto.randomBytes(4).toString('hex')}`);
   await fs.mkdir(pasta, { recursive: true, mode: 0o700 });
 
@@ -150,8 +151,31 @@ async function entrar(p: Provedor): Promise<number> {
     }
     return 0;
   } finally {
+    await apagar(pasta);
     process.off('SIGINT', ignorar);
-    await fs.rm(pasta, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+/**
+ * Apaga a pasta do login. O Codex roda um binário por baixo do comando, que
+ * ainda grava log e travas por um instante depois de sair: apaga de novo.
+ */
+async function apagar(pasta: string): Promise<void> {
+  await fs.rm(pasta, { recursive: true, force: true }).catch(() => undefined);
+  await new Promise((r) => setTimeout(r, 2_000));
+  await fs.rm(pasta, { recursive: true, force: true }).catch(() => undefined);
+}
+
+/** Sobras de logins antigos (terminal fechado no meio). */
+async function limparSobras(): Promise<void> {
+  const corte = Date.now() - 30 * 60_000;
+  try {
+    for (const nome of await fs.readdir(pastaDosLogins())) {
+      const alvo = path.join(pastaDosLogins(), nome);
+      if ((await fs.stat(alvo)).mtimeMs < corte) await fs.rm(alvo, { recursive: true, force: true });
+    }
+  } catch {
+    // nada para limpar
   }
 }
 
