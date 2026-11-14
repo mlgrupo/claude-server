@@ -121,9 +121,10 @@ curl -X POST https://claude-server-production-bf2fccdc.up.railway.app/api/v1/age
 
 O [Habblaud](https://github.com/marmottajr/habblaud) (MIT, fixado na v1.0.3 no `Dockerfile`) roda dentro do container e lê as sessões do Claude Code daqui: cada agente vira uma sala, cada pedido, um personagem trabalhando, e os medidores de 5 h e da semana mostram o uso da assinatura.
 
-- Escuta em `127.0.0.1:4747` (sem login, só dentro do container) e na porta `4748` (`ESCRITORIO_PORTA`), onde **toda requisição exige login**: usuário `habblaud` (`ESCRITORIO_USUARIO`) e a mesma senha do Habblaud (`APP_PASSWORD`, guardada como hash scrypt).
-- No Railway, um domínio próprio aponta para a porta 4748; ponha esse domínio em `ESCRITORIO_HOSTS`. O HTTPS fica com o Railway.
-- Só leitura: terminal, mensagens, aprovações e "novo agente" do Habblaud ficam desligados; o Habblaud World e a checagem de versão também (nada sai do container).
+- **Como abrir:** item **Escritório** no menu, ou `/escritorio` no endereço do Habblaud. Com o login do Habblaud feito, ele emite um passe de uso único (60 s) e abre o domínio do escritório já logado — sem segunda senha.
+- O Habblaud escuta só em `127.0.0.1:4747`. A porta `4748` (`ESCRITORIO_PORTA`) é um portão do próprio servidor: confere o cookie do escritório em toda requisição e repassa ao Habblaud (inclusive o tempo real, SSE). Sem login, a página volta para `/escritorio` (`APP_URL`) e a API responde 401.
+- No Railway, um domínio próprio aponta para a porta 4748; ponha esse domínio em `ESCRITORIO_HOSTS` e o endereço do Habblaud em `APP_URL`. O HTTPS fica com o Railway.
+- Só leitura: o portão manda ao Habblaud um Host interno que não é local, então terminal, mensagens, aprovações e "novo agente" ficam desligados de qualquer jeito; o Habblaud World e a checagem de versão também (nada sai do container).
 - Roda com o mesmo usuário do agente (as transcrições do Claude Code são privadas, 600), então enxerga os mesmos arquivos. `ESCRITORIO=off` desliga.
 
 ## Desenvolvimento local

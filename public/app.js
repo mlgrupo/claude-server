@@ -345,6 +345,12 @@ async function openConversation(id) {
 
 function route() {
   closeNav();
+  // Veio de /escritorio sem login: depois de entrar, segue para o escritório.
+  if (location.hash === '#/escritorio') {
+    history.replaceState(null, '', '/');
+    location.assign('/escritorio');
+    return;
+  }
   if (location.hash === '#/terminal') return showTerminal();
   if (location.hash === '#/agentes') return showAgents();
   if (state.view !== 'chat') {
@@ -759,6 +765,7 @@ function renderAgents() {
   if (office.url) link.href = office.url;
   $('#agents-office-off').hidden = !!(office.ligado && office.url);
   $('#agents-office-off').textContent = office.ligado ? 'Escritório sem endereço público (ESCRITORIO_HOSTS).' : 'Escritório desligado.';
+  $('#open-office').hidden = !(office.ligado && office.url);
 
   // Salas
   const rooms = $('#agents-rooms');

@@ -3,22 +3,31 @@
 // do container, lendo as sessões do Claude Code daqui. Cada agente vira uma
 // sala e cada pedido, um personagem trabalhando ao vivo.
 //
-// O Habblaud escuta em 127.0.0.1:4747 (porta local, sem login) e na porta
-// remota ESCRITORIO_PORTA (4748), que exige usuário e senha em toda
-// requisição. Só a remota tem domínio público no Railway; o HTTPS fica com o
-// Railway. A senha é a mesma do Habblaud (APP_PASSWORD), guardada como hash.
-// Modo só leitura: nada de terminal, mensagens ou aprovações pelo escritório.
+//   navegador ──► /escritorio (login do Habblaud) ──► passe de uso único
+//            ──► domínio do escritório (porta ESCRITORIO_PORTA, este portão)
+//            ──► confere o cookie do escritório e repassa ──► Habblaud em 127.0.0.1:4747
+//
+// O Habblaud só escuta no loopback; quem chega de fora passa sempre pelo
+// portão. O portão manda um Host interno que NÃO é loopback: para o Habblaud
+// o acesso é "de fora", então terminal, mensagens e aprovações ficam
+// desligados mesmo que alguém os ligue por engano. Só leitura.
 // =============================================================================
 
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes, scrypt } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { cookieDoEscritorio, sessaoDoEscritorioValida, usarPasseDoEscritorio } from './auth.js';
 import { agentEnv, config } from './config.js';
 
+const PORTA_DO_HABBLAUD = 4747;
+/** Nome que o portão usa no Host: liberado no Habblaud, mas não é loopback. */
+const HOST_INTERNO = 'escritorio.habblaud.interno';
+
 let processo: ChildProcess | null = null;
+let portao: http.Server | null = null;
 let parando = false;
 let tentativas = 0;
 let ativoDesde: number | null = null;
@@ -35,16 +44,9 @@ function pastaDeUso(): string {
   return path.join(pastaDeDados(), 'uso');
 }
 
-/** O mesmo formato do `npm run remote:setup` do Habblaud: scrypt:<logN>:<r>:<p>:<sal>:<hash>. */
-export function hashDaSenha(senha: string, sal = randomBytes(16)): Promise<string> {
-  const logN = 15;
-  const r = 8;
-  const p = 1;
-  return new Promise((ok, falha) =>
-    scrypt(senha.normalize('NFC'), sal, 32, { N: 2 ** logN, r, p, maxmem: 256 * 2 ** logN * r }, (err, chave) =>
-      err ? falha(err) : ok(`scrypt:${logN}:${r}:${p}:${sal.toString('base64url')}:${chave.toString('base64url')}`),
-    ),
-  );
+/** Domínio público do escritório (o que aponta para ESCRITORIO_PORTA no Railway). */
+export function hostDoEscritorio(): string | null {
+  return config.escritorioHosts?.split(',')[0]?.trim() || null;
 }
 
 export function escritorioDisponivel(): boolean {
@@ -52,12 +54,11 @@ export function escritorioDisponivel(): boolean {
 }
 
 export function estadoDoEscritorio() {
-  const host = config.escritorioHosts?.split(',')[0]?.trim();
   return {
     ligado: escritorioDisponivel(),
     rodando: !!processo && ativoDesde !== null,
-    url: host ? `https://${host}` : null,
-    usuario: config.escritorioUsuario,
+    // A interface abre por /escritorio, que faz o login no domínio do escritório.
+    url: escritorioDisponivel() && hostDoEscritorio() ? '/escritorio' : null,
   };
 }
 
@@ -68,12 +69,12 @@ export async function iniciarEscritorio(): Promise<void> {
     return;
   }
   await fs.mkdir(pastaDeUso(), { recursive: true });
-  const hash = await hashDaSenha(config.appPassword ?? '');
   parando = false;
-  subir(hash);
+  subir();
+  abrirPortao();
 }
 
-function subir(hash: string): void {
+function subir(): void {
   const env: Record<string, string | undefined> = {
     ...agentEnv(),
     // Credenciais do Claude não servem para o Habblaud: ele só lê arquivos.
@@ -83,7 +84,7 @@ function subir(hash: string): void {
     GITHUB_TOKEN: undefined,
     NODE_ENV: 'production',
     HABBLAUD_HOST: '127.0.0.1',
-    HABBLAUD_PORT: '4747',
+    HABBLAUD_PORT: String(PORTA_DO_HABBLAUD),
     HABBLAUD_CLAUDE_DIRS: pastaDoClaude(),
     HABBLAUD_DATA_DIR: pastaDeDados(),
     HABBLAUD_USAGE_DIR: pastaDeUso(),
@@ -94,14 +95,7 @@ function subir(hash: string): void {
     HABBLAUD_TERMINAL: '0',
     HABBLAUD_MENSAGENS: '0',
     HABBLAUD_PTY: '0',
-    HABBLAUD_REMOTE_USER: config.escritorioUsuario,
-    HABBLAUD_REMOTE_PASSWORD_HASH: hash,
-    HABBLAUD_REMOTE_HOST: '0.0.0.0',
-    HABBLAUD_REMOTE_PORT: String(config.escritorioPorta),
-    // O TLS termina no Railway; daqui até o container é a rede interna dele.
-    HABBLAUD_REMOTE_INSECURE_HTTP: '1',
-    HABBLAUD_REMOTE_ALLOW: 'none',
-    HABBLAUD_ALLOWED_HOSTS: config.escritorioHosts ?? '',
+    HABBLAUD_ALLOWED_HOSTS: HOST_INTERNO,
   };
   const filho = spawn(process.execPath, [path.join(config.escritorioDir, 'dist', 'server', 'index.js')], {
     cwd: config.escritorioDir,
@@ -128,14 +122,97 @@ function subir(hash: string): void {
     const espera = Math.min(60_000, 2_000 * 2 ** Math.min(tentativas, 5));
     console.warn(`[escritorio] Habblaud saiu (código ${codigo ?? '-'}, sinal ${sinal ?? '-'}); sobe de novo em ${espera / 1000} s.`);
     setTimeout(() => {
-      if (!parando) subir(hash);
+      if (!parando) subir();
     }, espera).unref();
   });
+}
+
+// ---------------------------------------------------------------------------
+// Portão: a porta pública do escritório.
+// ---------------------------------------------------------------------------
+
+function abrirPortao(): void {
+  if (portao) return;
+  portao = http.createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://portao');
+    if (url.pathname === '/__entrar') return entrar(url, res);
+    if (!sessaoDoEscritorioValida(req)) return semLogin(req, res);
+    repassar(req, res);
+  });
+  // O Habblaud não usa WebSocket com o World desligado: upgrade não passa.
+  portao.on('upgrade', (_req, socket) => socket.destroy());
+  portao.requestTimeout = 0; // o tempo real (SSE) fica aberto
+  portao.listen(config.escritorioPorta, '0.0.0.0', () => {
+    console.log(`[escritorio] portão na porta ${config.escritorioPorta} → Habblaud em 127.0.0.1:${PORTA_DO_HABBLAUD}`);
+  });
+  portao.on('error', (err) => console.error(`[escritorio] portão: ${String(err)}`));
+}
+
+/** Troca o passe (emitido por /escritorio, já logado) pelo cookie deste domínio. */
+function entrar(url: URL, res: http.ServerResponse): void {
+  const passe = url.searchParams.get('passe') ?? '';
+  if (!usarPasseDoEscritorio(passe)) {
+    res.writeHead(302, { Location: config.appUrl ? `${config.appUrl}/escritorio` : '/', 'Cache-Control': 'no-store' });
+    res.end();
+    return;
+  }
+  res.writeHead(302, {
+    'Set-Cookie': cookieDoEscritorio(),
+    // Tira o passe da barra de endereço.
+    Location: '/',
+    'Cache-Control': 'no-store',
+    'Referrer-Policy': 'no-referrer',
+  });
+  res.end();
+}
+
+function semLogin(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const pagina = (req.headers.accept ?? '').includes('text/html') && (req.method === 'GET' || req.method === 'HEAD');
+  if (pagina && config.appUrl) {
+    // Passa pelo login do Habblaud, que manda de volta com um passe.
+    res.writeHead(302, { Location: `${config.appUrl}/escritorio`, 'Cache-Control': 'no-store' });
+    res.end();
+    return;
+  }
+  const corpo = pagina
+    ? '<!doctype html><meta charset="utf-8"><title>Escritório</title><p style="font:16px system-ui;padding:2rem">Entre no Habblaud e abra o <b>Escritório</b> pelo menu.</p>'
+    : JSON.stringify({ error: 'faça login pelo Habblaud (/escritorio)' });
+  res.writeHead(pagina ? 200 : 401, {
+    'Content-Type': pagina ? 'text/html; charset=utf-8' : 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end(corpo);
+}
+
+function repassar(req: http.IncomingMessage, res: http.ServerResponse): void {
+  const headers: http.OutgoingHttpHeaders = { ...req.headers, host: HOST_INTERNO };
+  // O cookie do portão não interessa ao Habblaud.
+  delete headers.cookie;
+  if (headers.origin) headers.origin = `http://${HOST_INTERNO}`;
+  const ida = http.request(
+    { host: '127.0.0.1', port: PORTA_DO_HABBLAUD, method: req.method, path: req.url, headers },
+    (volta) => {
+      res.writeHead(volta.statusCode ?? 502, { ...volta.headers, 'X-Accel-Buffering': 'no' });
+      volta.pipe(res);
+    },
+  );
+  ida.on('error', () => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end('O escritório está subindo. Atualize a página em alguns segundos.');
+    } else {
+      res.destroy();
+    }
+  });
+  // Quem fechou a aba encerra a conexão com o Habblaud também (tempo real/SSE).
+  res.on('close', () => ida.destroy());
+  req.pipe(ida);
 }
 
 export function pararEscritorio(): void {
   parando = true;
   processo?.kill('SIGTERM');
+  portao?.close();
 }
 
 // ---------------------------------------------------------------------------

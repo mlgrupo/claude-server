@@ -135,3 +135,43 @@ export function logout(_req: Request, res: Response): void {
   res.clearCookie(COOKIE, { path: '/' });
   res.json({ ok: true });
 }
+
+// ---- Escritório: o login do Habblaud vale lá, sem pedir senha de novo ----
+// /escritorio (já logado) emite um passe de uso único e curto; o domínio do
+// escritório troca o passe por um cookie próprio dele (cookie não atravessa domínio).
+
+const COOKIE_ESCRITORIO = 'hb_escritorio';
+const PASSE_VALE_MS = 60_000;
+const passesUsados = new Map<string, number>();
+
+export function criarPasseDoEscritorio(): string {
+  const corpo = `${Date.now() + PASSE_VALE_MS}.${crypto.randomBytes(12).toString('base64url')}`;
+  return `${corpo}.${hmac(`escritorio-passe:${corpo}`)}`;
+}
+
+/** Confere e queima o passe (cada um entra uma vez só). */
+export function usarPasseDoEscritorio(passe: string): boolean {
+  const [exp, nonce, sig] = passe.split('.');
+  if (!exp || !nonce || !sig) return false;
+  if (!safeEqual(sig, hmac(`escritorio-passe:${exp}.${nonce}`))) return false;
+  const agora = Date.now();
+  if (!(Number(exp) > agora)) return false;
+  for (const [n, ate] of passesUsados) if (ate <= agora) passesUsados.delete(n);
+  if (passesUsados.has(nonce)) return false;
+  passesUsados.set(nonce, Number(exp));
+  return true;
+}
+
+export function cookieDoEscritorio(): string {
+  const exp = String(Date.now() + MAX_AGE_MS);
+  return `${COOKIE_ESCRITORIO}=${exp}.${hmac(`escritorio:${exp}`)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${MAX_AGE_MS / 1000}${config.secureCookies ? '; Secure' : ''}`;
+}
+
+export function sessaoDoEscritorioValida(req: WithHeaders): boolean {
+  const raw = readCookie(req, COOKIE_ESCRITORIO);
+  if (!raw) return false;
+  const [exp, sig] = raw.split('.');
+  if (!exp || !sig) return false;
+  if (!safeEqual(sig, hmac(`escritorio:${exp}`))) return false;
+  return Number(exp) > Date.now();
+}

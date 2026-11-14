@@ -61,9 +61,10 @@ export const config = {
   escritorio: env('ESCRITORIO') !== 'off',
   escritorioDir: path.resolve(env('ESCRITORIO_DIR') ?? '/opt/habblaud'),
   escritorioPorta: num('ESCRITORIO_PORTA', 4748),
-  escritorioUsuario: env('ESCRITORIO_USUARIO') ?? 'habblaud',
   /** Domínio(s) público(s) do escritório, separados por vírgula. */
   escritorioHosts: env('ESCRITORIO_HOSTS'),
+  /** Endereço público do Habblaud (para o escritório mandar de volta ao login). */
+  appUrl: env('APP_URL')?.replace(/\/+$/, '') ?? (env('RAILWAY_PUBLIC_DOMAIN') ? `https://${env('RAILWAY_PUBLIC_DOMAIN')}` : undefined),
 };
 
 function fracao(name: string, fallback: number): number {

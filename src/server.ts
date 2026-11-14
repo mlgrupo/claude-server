@@ -12,10 +12,24 @@ import {
   painelDosAgentes,
   pararTodosOsAgentes,
 } from './agentes.js';
-import { login, logout, requireAgentAccess, requireAuth, requireJsonBody } from './auth.js';
+import {
+  criarPasseDoEscritorio,
+  isAuthenticated,
+  login,
+  logout,
+  requireAgentAccess,
+  requireAuth,
+  requireJsonBody,
+} from './auth.js';
 import { brainHistory, initBrain, listBrainFiles, readBrainFile } from './brain.js';
 import { config, hasClaudeCredentials, validateConfig } from './config.js';
-import { estadoDoEscritorio, iniciarEscritorio, pararEscritorio } from './escritorio.js';
+import {
+  escritorioDisponivel,
+  estadoDoEscritorio,
+  hostDoEscritorio,
+  iniciarEscritorio,
+  pararEscritorio,
+} from './escritorio.js';
 import { listFiles, sendWorkspaceFile } from './files.js';
 import { HttpError, abortAll, activeRunFor, getRun, runningCount, startRun, stopRun, subscribe, type Run, type RunEvent } from './runner.js';
 import { deleteConversation, getConversation, initStore, listConversations } from './store.js';
@@ -256,6 +270,22 @@ async function main(): Promise<void> {
   });
 
   app.use('/api', api);
+
+  // Escritório: com o login do Habblaud, entra no domínio do escritório sem pedir senha de novo.
+  app.get('/escritorio', (req, res) => {
+    if (!isAuthenticated(req)) return res.redirect(302, '/#/escritorio');
+    const host = hostDoEscritorio();
+    if (!escritorioDisponivel() || !host) {
+      return res
+        .status(503)
+        .type('text/plain; charset=utf-8')
+        .send('Escritório desligado: falta o domínio (ESCRITORIO_HOSTS) ou o Habblaud não está na imagem.');
+    }
+    const esquema = config.secureCookies ? 'https' : 'http';
+    res.set('Cache-Control', 'no-store');
+    res.redirect(302, `${esquema}://${host}/__entrar?passe=${encodeURIComponent(criarPasseDoEscritorio())}`);
+  });
+
   app.use(express.static(PUBLIC_DIR, { index: 'index.html', maxAge: '5m' }));
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
