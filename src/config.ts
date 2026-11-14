@@ -45,10 +45,46 @@ export const config = {
   // Terminal web
   terminalEnabled: env('TERMINAL') !== 'off',
   terminalIdleMs: num('TERMINAL_IDLE_MIN', 60) * 60_000,
+
+  // Agentes especializados (POST /api/v1/agentes/executar)
+  agentesAjustes: env('AGENTES'),
+  agentesDir: path.resolve(env('AGENTES_DIR') ?? path.join(dataDir, 'agentes')),
+  agentesMaxSimultaneos: num('AGENTES_MAX_SIMULTANEOS', 8),
+  agentesFilaMaxima: num('AGENTES_FILA_MAXIMA', 60),
+  agentesLimiteAutomatico: fracao('AGENTES_LIMITE_AUTOMATICO', 0.7),
+  agentesLimiteTela: fracao('AGENTES_LIMITE_TELA', 0.95),
+  agentesRetencaoDias: num('AGENTES_RETENCAO_DIAS', 3),
+  /** Tokens de sistemas que só chamam os agentes: "hofos:<token>,outro:<token>". */
+  clientTokens: lerTokensDeClientes(env('CLIENT_TOKENS')),
+
+  // Escritório (Habblaud): os agentes trabalhando ao vivo, em pixel art.
+  escritorio: env('ESCRITORIO') !== 'off',
+  escritorioDir: path.resolve(env('ESCRITORIO_DIR') ?? '/opt/habblaud'),
+  escritorioPorta: num('ESCRITORIO_PORTA', 4748),
+  escritorioUsuario: env('ESCRITORIO_USUARIO') ?? 'habblaud',
+  /** Domínio(s) público(s) do escritório, separados por vírgula. */
+  escritorioHosts: env('ESCRITORIO_HOSTS'),
 };
 
+function fracao(name: string, fallback: number): number {
+  const n = Number(env(name));
+  return n > 0 && n <= 1 ? n : fallback;
+}
+
+function lerTokensDeClientes(raw: string | undefined): Map<string, string> {
+  const mapa = new Map<string, string>();
+  for (const par of (raw ?? '').split(',')) {
+    const i = par.indexOf(':');
+    if (i <= 0) continue;
+    const nome = par.slice(0, i).trim();
+    const token = par.slice(i + 1).trim();
+    if (/^[a-z0-9-]{2,32}$/.test(nome) && token) mapa.set(token, nome);
+  }
+  return mapa;
+}
+
 /** Variáveis que só o servidor precisa — nunca vão para o processo do agente. */
-export const SERVER_ONLY_SECRETS = ['APP_PASSWORD', 'API_TOKEN', 'SESSION_SECRET'];
+export const SERVER_ONLY_SECRETS = ['APP_PASSWORD', 'API_TOKEN', 'SESSION_SECRET', 'CLIENT_TOKENS'];
 
 export function agentEnv(): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = { ...process.env };
@@ -61,6 +97,10 @@ export function validateConfig(): string[] {
   if (!config.appPassword) problems.push('APP_PASSWORD não definida — o servidor não sobe sem senha (ele executa comandos sem aprovação).');
   else if (config.appPassword.length < 12) problems.push('APP_PASSWORD precisa ter pelo menos 12 caracteres.');
   if (config.apiToken && config.apiToken.length < 24) problems.push('API_TOKEN precisa ter pelo menos 24 caracteres.');
+  for (const [token, nome] of config.clientTokens) {
+    if (token.length < 24) problems.push(`CLIENT_TOKENS: o token de "${nome}" precisa ter pelo menos 24 caracteres.`);
+    if (config.apiToken && token === config.apiToken) problems.push(`CLIENT_TOKENS: o token de "${nome}" não pode ser o API_TOKEN.`);
+  }
   return problems;
 }
 

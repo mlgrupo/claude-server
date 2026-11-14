@@ -36,6 +36,10 @@
       </div>
       <nav id="conv-list" class="conv-list" aria-label="Conversas"></nav>
       <div class="sidebar-bottom">
+        <a id="open-agents" class="side-link" href="#/agentes">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="8" width="6" height="8.5" rx="1"/><rect x="11.5" y="3.5" width="6" height="13" rx="1"/><path d="M4.5 11h2M4.5 13.5h2M13.5 6.5h2M13.5 9h2M13.5 11.5h2"/></svg>
+          Agentes
+        </a>
         <a id="open-term" class="side-link" href="#/terminal">
           <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="3.5" width="15" height="13" rx="2"/><path d="M6 8l2.5 2L6 12M10.5 12.5H14"/></svg>
           Terminal
@@ -92,6 +96,29 @@
           <button id="send" class="btn-primary" type="submit">Enviar</button>
         </div>
       </form>
+
+      <div id="agents-view" class="agents-view" hidden>
+        <div class="agents-inner">
+          <section class="agents-head" aria-label="Resumo">
+            <div class="agents-usage">
+              <p class="agents-usage-label">Assinatura</p>
+              <p id="agents-usage" class="agents-usage-value">sem leitura ainda</p>
+              <div class="meter" aria-hidden="true"><span id="agents-meter"></span></div>
+              <p id="agents-usage-note" class="agents-note"></p>
+            </div>
+            <div class="agents-office">
+              <p class="agents-note">Os agentes trabalhando ao vivo, em pixel art.</p>
+              <a id="agents-office-link" class="btn-primary" href="#" target="_blank" rel="noopener" hidden>Abrir escritório</a>
+              <p id="agents-office-off" class="agents-note" hidden>Escritório desligado.</p>
+            </div>
+          </section>
+          <div id="agents-rooms" class="agents-rooms"></div>
+          <section class="agents-feed-wrap">
+            <h3>Atividade recente</h3>
+            <ol id="agents-feed" class="agents-feed"></ol>
+          </section>
+        </div>
+      </div>
 
       <div id="term-view" class="term-view" hidden>
         <div id="term" class="term"></div>

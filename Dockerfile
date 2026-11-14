@@ -13,6 +13,21 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
+# ---------- escritório: Habblaud (github.com/marmottajr/habblaud, MIT) ----------
+# Fixado num commit (v1.0.3) para o build ser reproduzível e o código revisável.
+FROM node:22-bookworm-slim AS escritorio
+ARG HABBLAUD_COMMIT=faa1a012b5fbf632c66dc6801c5383e53a542406
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN git init -q . \
+ && git remote add origin https://github.com/marmottajr/habblaud.git \
+ && git fetch -q --depth 1 origin "$HABBLAUD_COMMIT" \
+ && git checkout -q FETCH_HEAD \
+ && npm ci --no-audit --no-fund \
+ && npm run build
+
 # ---------- runtime ----------
 FROM node:22-bookworm-slim
 
@@ -51,7 +66,11 @@ COPY public ./public
 COPY brain-template ./brain-template
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# O servidor do Habblaud não tem dependência de runtime: basta o dist/ e o package.json.
+COPY --from=escritorio /src/dist /opt/habblaud/dist
+COPY --from=escritorio /src/package.json /opt/habblaud/package.json
 
-EXPOSE 3000
+# 3000: o Habblaud (chat, terminal, agentes). 4748: o escritório, com login próprio.
+EXPOSE 3000 4748
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "dist/server.js"]

@@ -55,6 +55,31 @@ export function isAuthenticated(req: WithHeaders): boolean {
   return validBearer(req) || validSessionCookie(req);
 }
 
+/** Nome do sistema dono do token (CLIENT_TOKENS), ou undefined. Esses tokens só chamam os agentes. */
+export function clienteDoToken(req: WithHeaders): string | undefined {
+  const h = req.headers.authorization;
+  if (!h?.startsWith('Bearer ')) return undefined;
+  const enviado = h.slice(7).trim();
+  for (const [token, nome] of config.clientTokens) {
+    if (safeEqual(enviado, token)) return nome;
+  }
+  return undefined;
+}
+
+/** Login completo (senha ou API_TOKEN) ou token de um sistema cliente. Guarda quem chamou em res.locals.cliente. */
+export function requireAgentAccess(req: Request, res: Response, next: NextFunction): void {
+  if (isAuthenticated(req)) {
+    res.locals.cliente = 'admin';
+    return next();
+  }
+  const cliente = clienteDoToken(req);
+  if (cliente) {
+    res.locals.cliente = cliente;
+    return next();
+  }
+  res.status(401).json({ erro: 'nao_autenticado', mensagem: 'token inválido' });
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (isAuthenticated(req)) return next();
   res.status(401).json({ error: 'não autenticado' });

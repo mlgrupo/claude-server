@@ -424,6 +424,60 @@ a.side-link { text-decoration: none; }
 }
 .term-keys button[aria-pressed="true"] { background: var(--saffron); border-color: var(--saffron); color: #1E1503; }
 
+/* ---------- Agentes ---------- */
+.agents-view { flex: 1; min-height: 0; overflow-y: auto; }
+.agents-inner { max-width: 1120px; margin: 0 auto; padding: 24px 24px 40px; }
+.agents-head {
+  display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: end;
+  padding-bottom: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--rule);
+}
+.agents-usage-label { margin: 0; font-size: .85rem; color: var(--ink-2); }
+.agents-usage-value { margin: 2px 0 8px; font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
+.meter { height: 8px; max-width: 420px; border-radius: 4px; background: var(--sunk); overflow: hidden; }
+.meter span { display: block; height: 100%; width: 0; background: var(--teal); transition: width .4s ease; }
+.meter span.warn { background: var(--saffron); }
+.agents-note { margin: 8px 0 0; font-size: .85rem; color: var(--ink-2); max-width: 60ch; }
+.agents-office { text-align: right; }
+.agents-office .agents-note { margin: 0 0 10px; }
+.agents-office .btn-primary { display: inline-block; text-decoration: none; }
+
+.agents-rooms { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; }
+.room {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 16px; border: 1px solid var(--rule); border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.room.busy { border-color: var(--saffron); box-shadow: inset 4px 0 0 var(--saffron); }
+.room-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.room-head h4 { margin: 0; font-size: 1.05rem; font-weight: 800; }
+.room-model { font-family: var(--mono); font-size: .75rem; color: var(--ink-2); white-space: nowrap; }
+.room-desc { margin: 0; font-size: .88rem; color: var(--ink-2); }
+.room-seats { display: flex; align-items: center; gap: 6px; }
+.seat { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid var(--rule); background: transparent; }
+.seat.on { background: var(--saffron); border-color: var(--saffron); animation: pulse 1.6s ease-in-out infinite; }
+.room-queue { margin-left: 4px; font-size: .8rem; font-weight: 600; color: var(--saffron-ink); background: var(--saffron-wash); padding: 1px 8px; border-radius: 99px; }
+.room-now { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; min-height: 1.5em; }
+.room-now li { display: flex; justify-content: space-between; gap: 10px; font-size: .9rem; }
+.room-task { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.room-timer { font-family: var(--mono); font-size: .8rem; color: var(--ink-2); flex: none; }
+.room-idle { color: var(--ink-2); }
+.room-stats { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0; padding-top: 10px; border-top: 1px solid var(--rule); }
+.room-stats dt { font-size: .75rem; color: var(--ink-2); grid-row: 1; }
+.room-stats dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; grid-row: 2; }
+
+.agents-feed-wrap h3 { margin: 28px 0 10px; font-size: 1rem; }
+.agents-feed { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--rule); }
+.agents-feed li {
+  display: grid; grid-template-columns: 70px minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1.4fr); gap: 12px;
+  padding: 8px 0; border-bottom: 1px solid var(--rule); font-size: .88rem; align-items: baseline;
+}
+.agents-feed time { font-family: var(--mono); font-size: .78rem; color: var(--ink-2); }
+.feed-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-who, .feed-res { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed-erro .feed-res { color: var(--crimson); }
+.feed-recusado .feed-res { color: var(--saffron-ink); }
+.agents-feed .feed-empty { display: block; color: var(--ink-2); }
+
 /* ---------- Cérebro ---------- */
 .brain {
   width: min(1040px, calc(100vw - 32px));
@@ -491,6 +545,12 @@ a.side-link { text-decoration: none; }
   .brain-view { padding: 16px; }
   .empty h3 { font-size: 1.6rem; }
   .term { margin: 8px 4px 4px 8px; }
+  .agents-inner { padding: 16px 16px 32px; }
+  .agents-head { grid-template-columns: 1fr; }
+  .agents-office { text-align: left; }
+  .agents-rooms { grid-template-columns: 1fr; }
+  .agents-feed li { grid-template-columns: 62px minmax(0, 1fr); }
+  .agents-feed .feed-who, .agents-feed .feed-res { grid-column: 2; }
 }
 
 @media (prefers-reduced-motion: reduce) {

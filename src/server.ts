@@ -2,9 +2,20 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { login, logout, requireAuth, requireJsonBody } from './auth.js';
+import {
+  ErroDeAgente,
+  agentesOcupados,
+  executarAgente,
+  iniciarLimpezaDosAgentes,
+  lerPedido,
+  ouvirPainel,
+  painelDosAgentes,
+  pararTodosOsAgentes,
+} from './agentes.js';
+import { login, logout, requireAgentAccess, requireAuth, requireJsonBody } from './auth.js';
 import { brainHistory, initBrain, listBrainFiles, readBrainFile } from './brain.js';
 import { config, hasClaudeCredentials, validateConfig } from './config.js';
+import { estadoDoEscritorio, iniciarEscritorio, pararEscritorio } from './escritorio.js';
 import { listFiles, sendWorkspaceFile } from './files.js';
 import { HttpError, abortAll, activeRunFor, getRun, runningCount, startRun, stopRun, subscribe, type Run, type RunEvent } from './runner.js';
 import { deleteConversation, getConversation, initStore, listConversations } from './store.js';
@@ -45,10 +56,17 @@ async function main(): Promise<void> {
   await initStore();
   await initBrain();
 
+  await fs.mkdir(config.agentesDir, { recursive: true });
+  iniciarLimpezaDosAgentes();
+  await iniciarEscritorio();
+
   const app = express();
   app.set('trust proxy', true);
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '2mb' }));
+  // Os agentes recebem imagens em base64: corpo maior só nessa rota.
+  const jsonPadrao = express.json({ limit: '2mb' });
+  const jsonDosAgentes = express.json({ limit: '25mb' });
+  app.use((req, res, next) => (req.path.startsWith('/api/v1/agentes') ? jsonDosAgentes : jsonPadrao)(req, res, next));
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
@@ -58,10 +76,35 @@ async function main(): Promise<void> {
 
   // ---- Público ----
   app.get('/health', (_req, res) => {
-    res.json({ ok: true, running: runningCount() });
+    res.json({ ok: true, running: runningCount(), agentes: agentesOcupados() });
   });
   app.post('/api/login', requireJsonBody, login);
   app.post('/api/logout', logout);
+
+  // ---- Agentes especializados: o login completo ou o token de um sistema (CLIENT_TOKENS) ----
+  const v1 = express.Router();
+  v1.use(requireAgentAccess, requireJsonBody);
+  v1.get('/agentes', (_req, res) => {
+    res.json(painelDosAgentes());
+  });
+  // Síncrono: espera a resposta (com fila). 429 = sem vaga agora, siga pelo seu caminho.
+  v1.post(
+    '/agentes/executar',
+    asyncRoute(async (req, res) => {
+      try {
+        const pedido = lerPedido(req.body, String(res.locals.cliente ?? 'desconhecido'));
+        res.json(await executarAgente(pedido));
+      } catch (err) {
+        if (err instanceof ErroDeAgente) {
+          return res
+            .status(err.status)
+            .json({ erro: err.codigo, mensagem: err.message, ...(err.eventos?.length ? { eventos: err.eventos } : {}) });
+        }
+        throw err;
+      }
+    }),
+  );
+  app.use('/api/v1', v1);
 
   // ---- Protegido ----
   const api = express.Router();
@@ -190,6 +233,28 @@ async function main(): Promise<void> {
   api.get('/files', asyncRoute(listFiles));
   api.get('/files/raw', asyncRoute(sendWorkspaceFile));
 
+  // Tela de Agentes: o painel ao vivo (SSE) e o endereço do escritório.
+  api.get('/agentes', (_req, res) => {
+    res.json({ ...painelDosAgentes(), escritorio: estadoDoEscritorio() });
+  });
+  api.get('/agentes/eventos', (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    const enviar = () => res.write(`data: ${JSON.stringify({ ...painelDosAgentes(), escritorio: estadoDoEscritorio() })}\n\n`);
+    enviar();
+    const parar = ouvirPainel(enviar);
+    // Os cronômetros de quem está rodando andam mesmo sem evento novo.
+    const relogio = setInterval(enviar, 5_000);
+    req.on('close', () => {
+      parar();
+      clearInterval(relogio);
+    });
+  });
+
   app.use('/api', api);
   app.use(express.static(PUBLIC_DIR, { index: 'index.html', maxAge: '5m' }));
 
@@ -209,6 +274,8 @@ async function main(): Promise<void> {
   const shutdown = (signal: string) => {
     console.log(`[${signal}] encerrando — interrompendo tarefas em andamento`);
     abortAll();
+    pararTodosOsAgentes();
+    pararEscritorio();
     closeAllTerminals();
     server.close();
     setTimeout(() => process.exit(0), 8_000).unref();

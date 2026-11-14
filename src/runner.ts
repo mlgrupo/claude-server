@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { query, type Options, type SDKMessage } from '@anthropic-ai/claude-agent-sdk';
+import { registrarLimite } from './agentes.js';
 import { commitBrain, reflectionPrompt, systemPromptAppend } from './brain.js';
 import { agentEnv, config } from './config.js';
 import {
@@ -198,6 +199,11 @@ async function execute(run: Run, message: string): Promise<void> {
   }, config.runTimeoutMs);
 
   const handle = (msg: SDKMessage): void => {
+    if (msg.type === 'rate_limit_event') {
+      // O chat também gasta a assinatura: o teto dos agentes e o escritório enxergam.
+      registrarLimite(msg.rate_limit_info as unknown as Record<string, unknown>);
+      return;
+    }
     if (msg.type === 'system' && msg.subtype === 'init') {
       if (msg.session_id !== sessionId) {
         sessionId = msg.session_id;

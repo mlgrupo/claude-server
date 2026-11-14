@@ -289,7 +289,7 @@ function renderConvList() {
   }
   for (const c of state.conversations) {
     const row = el('div', 'conv-item');
-    if (c.id === state.currentId && state.view !== 'terminal') row.classList.add('active');
+    if (c.id === state.currentId && state.view === 'chat') row.classList.add('active');
     const a = el('a');
     a.href = `#/c/${c.id}`;
     a.append(el('span', null, c.title), el('small', null, fmtWhen(c.updatedAt)));
@@ -346,7 +346,8 @@ async function openConversation(id) {
 function route() {
   closeNav();
   if (location.hash === '#/terminal') return showTerminal();
-  if (state.view === 'terminal') {
+  if (location.hash === '#/agentes') return showAgents();
+  if (state.view !== 'chat') {
     setView('chat');
     $('#conv-title').textContent = 'Nova tarefa';
   }
@@ -652,15 +653,176 @@ function showTermEnded(message) {
 function setView(view) {
   state.view = view;
   const isTerm = view === 'terminal';
-  $('#scroller').hidden = isTerm;
-  $('#composer').hidden = isTerm;
-  $('#model-pick').hidden = isTerm;
+  const isAgents = view === 'agentes';
+  const isChat = view === 'chat';
+  $('#scroller').hidden = !isChat;
+  $('#composer').hidden = !isChat;
+  $('#model-pick').hidden = !isChat;
   $('#term-view').hidden = !isTerm;
   $('#term-actions').hidden = !isTerm;
   $('#term-keys').hidden = !(isTerm && coarse);
+  $('#agents-view').hidden = !isAgents;
   $('#open-term').classList.toggle('active', isTerm);
+  $('#open-agents').classList.toggle('active', isAgents);
   if (isTerm) $('#conv-title').textContent = 'Terminal';
+  if (isAgents) $('#conv-title').textContent = 'Agentes';
+  if (!isAgents) closeAgentsStream();
   renderConvList();
+}
+
+// ---------------------------------------------------------------- Agentes
+let agentsStream = null;
+let agentsTick = null;
+let agentsData = null;
+
+function closeAgentsStream() {
+  agentsStream?.close();
+  agentsStream = null;
+  clearInterval(agentsTick);
+  agentsTick = null;
+}
+
+function showAgents() {
+  setView('agentes');
+  if (agentsStream) return;
+  agentsStream = new EventSource('/api/agentes/eventos');
+  agentsStream.onmessage = (e) => {
+    try {
+      agentsData = JSON.parse(e.data);
+      renderAgents();
+    } catch {
+      /* evento torto: espera o próximo */
+    }
+  };
+  agentsStream.onerror = async () => {
+    // A sessão pode ter caído: /me devolve 401 e mostra o login.
+    if (agentsStream?.readyState === EventSource.CLOSED) {
+      closeAgentsStream();
+      try {
+        await api('/me');
+        if (state.view === 'agentes') setTimeout(showAgents, 3000);
+      } catch {
+        /* login já na tela */
+      }
+    }
+  };
+  // Os cronômetros de quem está trabalhando andam a cada segundo.
+  agentsTick = setInterval(() => agentsData && renderAgentsTimers(), 1000);
+}
+
+const MODELO_CURTO = (m) => (/haiku/i.test(m) ? 'Haiku' : /sonnet/i.test(m) ? 'Sonnet' : /opus/i.test(m) ? 'Opus' : /fable/i.test(m) ? 'Fable' : m);
+
+function fmtDur(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 1000) return `${ms} ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`;
+  const m = Math.floor(s / 60);
+  return `${m} min ${Math.round(s % 60)} s`;
+}
+
+function fmtTokens(n) {
+  if (!n) return '0';
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} mi` : n >= 1000 ? `${Math.round(n / 1000)} mil` : String(n);
+}
+
+function renderAgents() {
+  const d = agentsData;
+  if (!d || state.view !== 'agentes') return;
+
+  // Assinatura
+  const a = d.assinatura;
+  const meter = $('#agents-meter');
+  if (a && a.utilizacao !== null) {
+    const pct = Math.round(a.utilizacao * 100);
+    const janela = a.tipo === 'five_hour' ? 'da janela de 5 h' : a.tipo === 'seven_day' ? 'da semana' : 'da janela';
+    $('#agents-usage').textContent = `${pct}% ${janela}`;
+    meter.style.width = `${Math.min(100, pct)}%`;
+    meter.className = a.utilizacao >= a.tetoAutomatico ? 'warn' : '';
+    const renova = a.renovaEm
+      ? ` Renova ${new Date(a.renovaEm).toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}.`
+      : '';
+    $('#agents-usage-note').textContent =
+      a.utilizacao >= a.tetoAutomatico
+        ? `Acima de ${Math.round(a.tetoAutomatico * 100)}%: os pedidos automáticos voltam para a API do sistema que chamou.${renova}`
+        : `Pedidos automáticos param em ${Math.round(a.tetoAutomatico * 100)}%; os de tela, em ${Math.round(a.tetoTela * 100)}%.${renova}`;
+  } else {
+    $('#agents-usage').textContent = 'sem leitura ainda';
+    meter.style.width = '0';
+    $('#agents-usage-note').textContent = 'O uso aparece depois do primeiro pedido.';
+  }
+
+  // Escritório
+  const office = d.escritorio || {};
+  const link = $('#agents-office-link');
+  link.hidden = !(office.ligado && office.url);
+  if (office.url) link.href = office.url;
+  $('#agents-office-off').hidden = !!(office.ligado && office.url);
+  $('#agents-office-off').textContent = office.ligado ? 'Escritório sem endereço público (ESCRITORIO_HOSTS).' : 'Escritório desligado.';
+
+  // Salas
+  const rooms = $('#agents-rooms');
+  rooms.replaceChildren();
+  for (const ag of d.agentes) {
+    const room = el('article', 'room');
+    if (ag.rodando.length) room.classList.add('busy');
+    const head = el('header', 'room-head');
+    head.append(el('h4', null, ag.nome), el('span', 'room-model', `${MODELO_CURTO(ag.modelo)} · esforço ${ag.esforco}`));
+    room.append(head, el('p', 'room-desc', ag.descricao));
+
+    const seats = el('div', 'room-seats');
+    seats.setAttribute('aria-label', `${ag.rodando.length} de ${ag.simultaneos} vagas ocupadas, ${ag.naFila} na fila`);
+    for (let i = 0; i < ag.simultaneos; i++) seats.append(el('span', i < ag.rodando.length ? 'seat on' : 'seat'));
+    if (ag.naFila) seats.append(el('span', 'room-queue', `+${ag.naFila} na fila`));
+    room.append(seats);
+
+    const now = el('ul', 'room-now');
+    if (!ag.rodando.length) now.append(el('li', 'room-idle', 'Livre'));
+    for (const r of ag.rodando) {
+      const li = el('li');
+      li.append(el('span', 'room-task', [r.assunto, r.empresa].filter(Boolean).join(' · ')));
+      const t = el('time', 'room-timer');
+      t.dataset.since = r.desde;
+      li.append(t);
+      now.append(li);
+    }
+    room.append(now);
+
+    const h = ag.hoje;
+    const stats = el('dl', 'room-stats');
+    const stat = (k, v) => stats.append(el('dt', null, k), el('dd', null, v));
+    stat('Hoje', String(h.ok));
+    stat('Média', fmtDur(h.mediaMs));
+    stat('Erros', String(h.erro));
+    stat('Recusados', String(h.recusado));
+    room.append(stats);
+    rooms.append(room);
+  }
+  renderAgentsTimers();
+
+  // Atividade
+  const feed = $('#agents-feed');
+  feed.replaceChildren();
+  if (!d.ultimos.length) feed.append(el('li', 'feed-empty', 'Nenhum pedido ainda hoje.'));
+  const nomes = Object.fromEntries(d.agentes.map((x) => [x.id, x.nome]));
+  for (const u of d.ultimos.slice(0, 40)) {
+    const li = el('li', `feed-${u.status}`);
+    const t = el('time', null, new Date(u.em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    const what = el('span', 'feed-what', [u.assunto, u.empresa].filter(Boolean).join(' · '));
+    const who = el('span', 'feed-who', `${nomes[u.agente] || u.agente}${u.origem === 'tela' ? ' · na tela' : ''}`);
+    const res =
+      u.status === 'ok'
+        ? el('span', 'feed-res', `${fmtDur(u.duracaoMs)} · ${fmtTokens(u.tokensEntrada + u.tokensSaida)} tokens`)
+        : el('span', 'feed-res', `${u.status === 'erro' ? 'Erro' : 'Recusado'}: ${u.motivo || ''}`);
+    li.append(t, what, who, res);
+    feed.append(li);
+  }
+}
+
+function renderAgentsTimers() {
+  for (const t of document.querySelectorAll('#agents-rooms .room-timer')) {
+    t.textContent = fmtDur(Date.now() - new Date(t.dataset.since).getTime());
+  }
 }
 
 async function showTerminal() {
@@ -694,6 +856,7 @@ function closeNav() {
 function showLogin() {
   closeStream();
   termDisconnect();
+  closeAgentsStream();
   $('#app').hidden = true;
   $('#login').hidden = false;
   $('#password').focus();
