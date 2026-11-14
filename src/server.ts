@@ -260,6 +260,10 @@ async function main(): Promise<void> {
 
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+    // Corpo que não é JSON ou passou do limite: erro de quem chamou, não do servidor.
+    const tipo = (err as { type?: string } | null)?.type;
+    if (tipo === 'entity.parse.failed') return res.status(400).json({ error: 'corpo não é JSON válido', erro: 'json_invalido' });
+    if (tipo === 'entity.too.large') return res.status(413).json({ error: 'corpo grande demais', erro: 'pedido_grande' });
     console.error('[http]', err);
     if (!res.headersSent) res.status(500).json({ error: 'erro interno' });
   });

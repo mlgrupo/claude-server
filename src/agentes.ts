@@ -279,7 +279,46 @@ function naFilaDoAgente(id: string): number {
   return fila.filter((f) => f.pedido.agente.id === id).length;
 }
 
+// O mesmo pedido (mesmo cliente + id) chegando de novo — reenvio do cliente ou
+// da borda do Railway — recebe a mesma resposta em vez de rodar outra vez.
+const emAndamento = new Map<string, Promise<RespostaDeAgente>>();
+const concluidos = new Map<string, { ate: number; resposta?: RespostaDeAgente; erro?: ErroDeAgente }>();
+const LEMBRAR_RESULTADO_MS = 5 * 60_000;
+const MAX_LEMBRADOS = 500;
+
 export function executarAgente(pedido: PedidoDeAgente): Promise<RespostaDeAgente> {
+  const agora = Date.now();
+  for (const [chave, item] of concluidos) if (item.ate <= agora) concluidos.delete(chave);
+  const chave = `${pedido.cliente}:${pedido.id}`;
+  const rodandoIgual = emAndamento.get(chave);
+  if (rodandoIgual) {
+    console.log(`[agentes] pedido ${pedido.id} repetido enquanto rodava: devolve o mesmo resultado`);
+    return rodandoIgual;
+  }
+  const jaFeito = concluidos.get(chave);
+  if (jaFeito) {
+    console.log(`[agentes] pedido ${pedido.id} repetido depois de terminar: devolve o resultado guardado`);
+    return jaFeito.resposta ? Promise.resolve(jaFeito.resposta) : Promise.reject(jaFeito.erro);
+  }
+  const promessa = admitir(pedido);
+  emAndamento.set(chave, promessa);
+  const lembrar = (item: { resposta?: RespostaDeAgente; erro?: ErroDeAgente }) => {
+    if (concluidos.size >= MAX_LEMBRADOS) concluidos.delete(concluidos.keys().next().value as string);
+    concluidos.set(chave, { ate: Date.now() + LEMBRAR_RESULTADO_MS, ...item });
+  };
+  promessa
+    .then(
+      (resposta) => lembrar({ resposta }),
+      // Recusa por vaga ou limite não fica guardada: tentar de novo depois pode dar certo.
+      (erro) => {
+        if (erro instanceof ErroDeAgente && erro.status !== 429 && erro.status !== 503) lembrar({ erro });
+      },
+    )
+    .finally(() => emAndamento.delete(chave));
+  return promessa;
+}
+
+function admitir(pedido: PedidoDeAgente): Promise<RespostaDeAgente> {
   const bloqueio = bloqueioDaAssinatura(pedido.origem);
   if (bloqueio) {
     registrar(pedido, 'recusado', 0, 0, null, bloqueio);
