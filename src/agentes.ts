@@ -13,6 +13,7 @@
 // por exemplo) não consegue mexer em nada no servidor.
 // =============================================================================
 
+import { readFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -169,7 +170,20 @@ interface LimiteDaAssinatura {
   em: number;
 }
 
-let limite: LimiteDaAssinatura | null = null;
+// A última leitura vai para o disco: depois de um deploy, os tetos já valem
+// desde o primeiro pedido (sem ela, o primeiro lote passaria às cegas).
+const ARQUIVO_DO_LIMITE = path.join(config.agentesDir, 'limite-da-assinatura.json');
+let limite: LimiteDaAssinatura | null = lerLimiteGuardado();
+let gravandoLimite: Promise<void> = Promise.resolve();
+
+function lerLimiteGuardado(): LimiteDaAssinatura | null {
+  try {
+    const salvo = JSON.parse(readFileSync(ARQUIVO_DO_LIMITE, 'utf8')) as LimiteDaAssinatura;
+    return typeof salvo?.em === 'number' ? salvo : null;
+  } catch {
+    return null;
+  }
+}
 
 export function registrarLimite(info: Record<string, unknown> | undefined): void {
   if (!info) return;
@@ -186,6 +200,14 @@ export function registrarLimite(info: Record<string, unknown> | undefined): void
     tipo: typeof info.rateLimitType === 'string' ? info.rateLimitType : null,
     em: Date.now(),
   };
+  const conteudo = JSON.stringify(limite);
+  gravandoLimite = gravandoLimite
+    .then(async () => {
+      await fs.mkdir(config.agentesDir, { recursive: true });
+      await fs.writeFile(`${ARQUIVO_DO_LIMITE}.tmp`, conteudo);
+      await fs.rename(`${ARQUIVO_DO_LIMITE}.tmp`, ARQUIVO_DO_LIMITE);
+    })
+    .catch(() => undefined);
 }
 
 /** Motivo para recusar o pedido por causa da assinatura, ou null. */
