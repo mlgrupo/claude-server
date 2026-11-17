@@ -48,6 +48,8 @@ export const config = {
 
   // Agentes especializados (POST /api/v1/agentes/executar)
   agentesAjustes: env('AGENTES'),
+  /** Modelo opcional do Codex; sem ele, usa o padrão disponível na assinatura ativa. */
+  agentesCodexModel: env('AGENTES_CODEX_MODEL'),
   agentesDir: path.resolve(env('AGENTES_DIR') ?? path.join(dataDir, 'agentes')),
   agentesMaxSimultaneos: num('AGENTES_MAX_SIMULTANEOS', 10),
   agentesFilaMaxima: num('AGENTES_FILA_MAXIMA', 60),
