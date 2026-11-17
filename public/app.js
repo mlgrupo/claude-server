@@ -766,10 +766,10 @@ function renderAgents() {
     $('#agents-usage-note').textContent = 'O uso aparece depois da primeira tarefa no chat.';
   }
   $('#agents-cred').textContent =
-    d.credencial === 'chave_da_api'
-      ? 'Os agentes rodam com a chave da API, sem gastar a assinatura da equipe.'
-      : 'Agentes parados: falta a chave da API (AGENTES_ANTHROPIC_API_KEY no Railway). Enquanto isso, o HofOS segue pela API dele.';
-  $('#agents-cred').classList.toggle('agents-alert', d.credencial !== 'chave_da_api');
+    d.credencial === 'assinatura_codex'
+      ? 'Os pedidos do HofOS usam somente a assinatura Codex selecionada em Contas.'
+      : 'Agentes parados: entre com uma conta ChatGPT/Codex em Contas. Não há fallback para Claude ou API.';
+  $('#agents-cred').classList.toggle('agents-alert', d.credencial !== 'assinatura_codex');
 
   // Escritório
   const office = d.escritorio || {};
@@ -787,7 +787,7 @@ function renderAgents() {
     const room = el('article', 'room');
     if (ag.rodando.length) room.classList.add('busy');
     const head = el('header', 'room-head');
-    head.append(el('h4', null, ag.nome), el('span', 'room-model', `${MODELO_CURTO(ag.modelo)} · esforço ${ag.esforco}`));
+    head.append(el('h4', null, ag.nome), el('span', 'room-model', MODELO_CURTO(ag.modelo)));
     room.append(head, el('p', 'room-desc', ag.descricao));
 
     const seats = el('div', 'room-seats');
@@ -876,7 +876,7 @@ async function showTerminal() {
 // ---------------------------------------------------------------- Contas
 const ACCOUNT_USE = {
   claude: 'Chat e terminal (comando claude).',
-  codex: 'Terminal (comando codex). As sessões aparecem no escritório.',
+  codex: 'Pedidos do HofOS e terminal (comando codex).',
   gemini: 'Terminal (comando gemini).',
 };
 let accountsBusy = false;
@@ -916,9 +916,9 @@ function renderAccounts(data) {
   list.removeAttribute('aria-busy');
   list.replaceChildren();
   $('#accounts-agents').textContent =
-    data.agentes?.credencial === 'chave_da_api'
-      ? 'Os agentes do HofOS não usam estas contas: rodam com a chave da API.'
-      : 'Os agentes do HofOS não usam estas contas. Eles precisam de uma chave da API (AGENTES_ANTHROPIC_API_KEY no Railway); sem ela, o HofOS segue pela API dele.';
+    data.agentes?.credencial === 'assinatura_codex'
+      ? 'Os agentes do HofOS usam somente a assinatura Codex marcada como ativa abaixo.'
+      : 'Os agentes do HofOS estão parados. Entre com uma conta ChatGPT no Codex e marque-a como ativa; não há fallback.';
 
   for (const p of ['claude', 'codex', 'gemini']) {
     const tool = data[p];

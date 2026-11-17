@@ -14,8 +14,8 @@
 // O login de uma conta nova roda no terminal web, pelo fluxo da própria
 // ferramenta, numa pasta à parte (`habblaud-conta entrar <ferramenta>`).
 //
-// Os agentes do HofOS não usam estas contas: usam a chave da API
-// (AGENTES_ANTHROPIC_API_KEY). Cada conta aqui é de uma pessoa da equipe.
+// Os agentes do HofOS usam exclusivamente a assinatura Codex selecionada aqui.
+// Uma autenticação do Codex somente por OPENAI_API_KEY não vale como assinatura.
 // =============================================================================
 
 import crypto from 'node:crypto';

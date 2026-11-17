@@ -27,6 +27,7 @@ import { config, validateConfig } from './config.js';
 import {
   ErroDeConta,
   claudeLogado,
+  codexAssinaturaAtiva,
   ehIdDeConta,
   ehProvedor,
   iniciarContas,
@@ -78,7 +79,7 @@ async function main(): Promise<void> {
   await initBrain();
   await iniciarContas();
   if (!claudeLogado()) console.warn('[contas] Nenhuma conta do Claude em uso: entre por Contas, no menu do Habblaud.');
-  if (!config.agentesApiKey) console.warn('[agentes] AGENTES_ANTHROPIC_API_KEY não definida: os agentes recusam pedidos (503).');
+  if (!codexAssinaturaAtiva()) console.warn('[agentes] Nenhuma assinatura Codex em uso: os agentes recusam pedidos (503).');
 
   await fs.mkdir(config.agentesDir, { recursive: true });
   iniciarLimpezaDosAgentes();
@@ -282,7 +283,7 @@ async function main(): Promise<void> {
   // Contas: os logins do Claude, do Codex e do Gemini, e qual está em uso.
   const contasComAgentes = async () => ({
     ...(await listarContas()),
-    agentes: { credencial: config.agentesApiKey ? 'chave_da_api' : 'sem_chave' },
+    agentes: { credencial: codexAssinaturaAtiva() ? 'assinatura_codex' : 'sem_assinatura_codex' },
   });
   const lerAlvo = (req: Request) => {
     const provedor = String(req.params.provedor);

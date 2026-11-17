@@ -1,20 +1,17 @@
 // =============================================================================
-// Agentes especializados: o Claude que outros sistemas (o HofOS, por exemplo)
+// Agentes especializados: o Codex que outros sistemas (o HofOS, por exemplo)
 // chamam por HTTP em POST /api/v1/agentes/executar.
 //
-// Cada agente é um Claude Code sem ferramenta nenhuma, com modelo, esforço e
-// vagas próprios: o "rápido" (Haiku) responde e encerra; o "estrategista"
-// (Opus) demora mais e entrega com qualidade. Quem chama manda o prompt de
+// Cada agente é um Codex efêmero sem ferramentas, com fila e vagas próprias.
+// Quem chama manda o prompt de
 // sistema, a mensagem e, se quiser, um esquema JSON e imagens; a resposta volta
-// com os eventos do Claude Code (init, rate_limit_event, result), no mesmo
-// formato do `claude -p --output-format stream-json`.
+// convertido para os eventos de resposta que o HofOS já consome.
 //
 // Sem ferramenta, o texto de terceiros que chega no prompt (mensagem de lead,
 // por exemplo) não consegue mexer em nada no servidor.
 //
-// Os agentes rodam com a chave da API (AGENTES_ANTHROPIC_API_KEY), nunca com a
-// assinatura de alguém da equipe: sem a chave, recusam com 503 e quem chamou
-// segue pelo caminho dele.
+// Os agentes rodam exclusivamente com a assinatura ChatGPT/Codex selecionada em
+// Contas. Sem assinatura, recusam com 503 e não fazem fallback para outra API.
 // =============================================================================
 
 import { readFileSync } from 'node:fs';
@@ -47,7 +44,7 @@ const AGENTES_PADRAO: Agente[] = [
     id: 'rapido',
     nome: 'Agente rápido',
     descricao: 'Análises de conversa, temperatura, comprovantes, posts do Instagram e JSON curtos: responde e encerra.',
-    modelo: 'haiku',
+    modelo: 'codex',
     esforco: 'low',
     // É o que mais recebe (milhares de análises por dia): mais vagas.
     simultaneos: 6,
@@ -57,7 +54,7 @@ const AGENTES_PADRAO: Agente[] = [
     id: 'analista',
     nome: 'Analista',
     descricao: 'Resumos e análises de conversa, call, atendimento e funil.',
-    modelo: 'sonnet',
+    modelo: 'codex',
     esforco: 'medium',
     simultaneos: 3,
     limiteSegundos: 300,
@@ -66,7 +63,7 @@ const AGENTES_PADRAO: Agente[] = [
     id: 'estrategista',
     nome: 'Estrategista',
     descricao: 'Roteiros, campanhas, newsletter, blog e relatórios: qualidade acima de velocidade.',
-    modelo: 'opus',
+    modelo: 'codex',
     esforco: 'high',
     simultaneos: 2,
     limiteSegundos: 600,
@@ -75,7 +72,7 @@ const AGENTES_PADRAO: Agente[] = [
     id: 'hofos-ai',
     nome: 'HofOS AI',
     descricao: 'O chat da equipe no HofOS: decide a próxima ferramenta ou responde.',
-    modelo: 'sonnet',
+    modelo: 'codex',
     esforco: 'medium',
     simultaneos: 3,
     limiteSegundos: 300,
@@ -84,7 +81,7 @@ const AGENTES_PADRAO: Agente[] = [
     id: 'editor-de-video',
     nome: 'Editor de vídeo',
     descricao: 'Plano de edição e ajustes dos vídeos do editor do HofOS.',
-    modelo: 'opus',
+    modelo: 'codex',
     esforco: 'high',
     simultaneos: 2,
     limiteSegundos: 600,
@@ -139,9 +136,8 @@ export function listaDeAgentes(): Agente[] {
  * Qual agente atende, pela função do produto que chamou (o rótulo `feature`
  * do HofOS). O pedido explícito vence; função sem regra vai pelo porte.
  */
-// Quem atende cada função do HofOS. Volume alto (uma chamada por lead, por
-// mensagem ou por post) vai para o rápido (Haiku), que custa menos que o
-// gpt-4o-mini de hoje; o Sonnet fica com o que é raro e pede texto bom.
+// Quem atende cada função do HofOS. Os perfis separam fila, concorrência e
+// prazo; todos usam o mesmo executor Codex.
 const AGENTE_PELA_FUNCAO: Array<[RegExp, string]> = [
   [/^suporte\.agente$/, 'hofos-ai'],
   [/^video\./, 'editor-de-video'],
@@ -164,17 +160,14 @@ export function escolherAgente(
   if (explicito) return explicito;
   const feature = pedido.feature ?? '';
   const regra = AGENTE_PELA_FUNCAO.find(([re]) => re.test(feature));
-  // A tabela manda: o "nível" do HofOS vem do modelo que ele usaria na OpenAI
-  // (o comprovante pede gpt-4o) e mandaria para o Sonnet o que o Haiku resolve.
-  // Sem regra para a função, pedido forte nunca cai no rápido.
+  // A tabela manda. Sem regra para a função, pedido forte nunca cai no rápido.
   const id = regra ? regra[1] : pedido.nivel === 'forte' ? 'analista' : 'rapido';
   return mapa.get(id) ?? mapa.get('rapido') ?? [...mapa.values()][0];
 }
 
 // ---------------------------------------------------------------------------
-// Uso da assinatura da equipe (a conta do Claude em uso no chat e no
-// terminal), para o medidor da tela de Agentes e o escritório. Os agentes não
-// gastam a assinatura: rodam com a chave da API (AGENTES_ANTHROPIC_API_KEY).
+// Uso da assinatura do Claude no chat e no terminal. É um medidor separado da
+// assinatura Codex usada pelos pedidos do HofOS.
 // ---------------------------------------------------------------------------
 
 interface LimiteDaAssinatura {
@@ -255,8 +248,8 @@ export interface PedidoDeAgente {
   cliente: string;
   prazo: number;
   /**
-   * Dado de cliente (clínica, paciente): a transcrição não fica gravada no
-   * servidor e o pedido não aparece no escritório, só no painel (assunto e empresa).
+   * Campo legado do contrato. O executor Codex é efêmero para todos os pedidos;
+   * nenhum conteúdo fica em sessão local, independentemente deste valor.
    */
   privado: boolean;
 }
@@ -691,9 +684,9 @@ export function painelDosAgentes() {
   return {
     dia,
     maxSimultaneos: config.agentesMaxSimultaneos,
-    /** Como os agentes se autenticam: só com a chave da API. */
-    credencial: config.agentesApiKey ? 'chave_da_api' : 'sem_chave',
-    /** Uso da assinatura da equipe (chat e terminal), não dos agentes. */
+    /** Como os agentes se autenticam: somente com a assinatura Codex ativa. */
+    credencial: codexAssinaturaAtiva() ? 'assinatura_codex' : 'sem_assinatura_codex',
+    /** Uso da assinatura Claude no chat e terminal, não dos agentes Codex. */
     assinatura: limite
       ? {
           utilizacao: limite.utilizacao,
@@ -707,6 +700,7 @@ export function painelDosAgentes() {
       const c = porAgente.get(a.id) ?? { ok: 0, erro: 0, recusado: 0, duracaoTotalMs: 0, tokensEntrada: 0, tokensSaida: 0 };
       return {
         ...a,
+        modelo: config.agentesCodexModel ?? 'codex',
         rodando: [...rodando.values()]
           .filter((r) => r.pedido.agente.id === a.id)
           .map((r) => ({
@@ -750,7 +744,7 @@ export function ouvirPainel(f: () => void): () => void {
 }
 
 // ---------------------------------------------------------------------------
-// Limpeza: as transcrições dos agentes ficam AGENTES_RETENCAO_DIAS dias.
+// Limpeza de transcrições legadas do antigo executor Claude.
 // ---------------------------------------------------------------------------
 
 function pastaDeProjetosDoClaude(): string {

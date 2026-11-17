@@ -9,6 +9,7 @@ import {
   escolherAgente,
   eventosDoResultadoCodex,
   executarAgente,
+  painelDosAgentes,
   type PedidoDeAgente,
 } from './agentes.js';
 
@@ -72,4 +73,34 @@ test('roteamento HofOS preserva contrato de eventos com resultado Codex', () => 
     usage: { input_tokens: 10, output_tokens: 4 },
   });
   assert(!JSON.stringify(eventos).includes('não pode vazar'));
+});
+
+test('painel informa quando falta assinatura Codex', async () => {
+  const anterior = process.env.CODEX_HOME;
+  const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'habblaud-painel-sem-codex-'));
+  try {
+    process.env.CODEX_HOME = pasta;
+    assert.equal(painelDosAgentes().credencial, 'sem_assinatura_codex');
+  } finally {
+    if (anterior === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = anterior;
+    await fs.rm(pasta, { recursive: true, force: true });
+  }
+});
+
+test('painel informa assinatura Codex ativa', async () => {
+  const anterior = process.env.CODEX_HOME;
+  const pasta = await fs.mkdtemp(path.join(os.tmpdir(), 'habblaud-painel-codex-'));
+  try {
+    process.env.CODEX_HOME = pasta;
+    await fs.writeFile(
+      path.join(pasta, 'auth.json'),
+      JSON.stringify({ tokens: { refresh_token: 'refresh-test', account_id: 'acct-test' } }),
+    );
+    assert.equal(painelDosAgentes().credencial, 'assinatura_codex');
+  } finally {
+    if (anterior === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = anterior;
+    await fs.rm(pasta, { recursive: true, force: true });
+  }
 });

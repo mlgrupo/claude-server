@@ -53,11 +53,6 @@ export const config = {
   agentesDir: path.resolve(env('AGENTES_DIR') ?? path.join(dataDir, 'agentes')),
   agentesMaxSimultaneos: num('AGENTES_MAX_SIMULTANEOS', 10),
   agentesFilaMaxima: num('AGENTES_FILA_MAXIMA', 60),
-  /**
-   * Chave da API da Anthropic só dos agentes (o HofOS e outros sistemas). As
-   * assinaturas em Contas são das pessoas da equipe, para o chat e o terminal.
-   */
-  agentesApiKey: env('AGENTES_ANTHROPIC_API_KEY'),
   agentesRetencaoDias: num('AGENTES_RETENCAO_DIAS', 3),
   /** Tokens de sistemas que só chamam os agentes: "hofos:<token>,outro:<token>". */
   clientTokens: lerTokensDeClientes(env('CLIENT_TOKENS')),
@@ -84,7 +79,7 @@ function lerTokensDeClientes(raw: string | undefined): Map<string, string> {
   return mapa;
 }
 
-/** Variáveis que só o servidor precisa — nunca vão para o processo do agente. */
+/** Variáveis que só o servidor precisa — inclui a chave legada para nunca vazá-la. */
 export const SERVER_ONLY_SECRETS = ['APP_PASSWORD', 'API_TOKEN', 'SESSION_SECRET', 'CLIENT_TOKENS', 'AGENTES_ANTHROPIC_API_KEY'];
 
 export function agentEnv(): Record<string, string | undefined> {
