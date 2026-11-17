@@ -3,13 +3,16 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import type { ResultadoCodex } from './codex-agente.js';
+import { ErroCodex, type ResultadoCodex } from './codex-agente.js';
 import {
   ErroDeAgente,
   escolherAgente,
   eventosDoResultadoCodex,
+  erroCodexParaErroDeAgente,
   executarAgente,
   painelDosAgentes,
+  reservarPedidoCodex,
+  reservarTrocaDeContaCodex,
   type PedidoDeAgente,
 } from './agentes.js';
 
@@ -73,6 +76,47 @@ test('roteamento HofOS preserva contrato de eventos com resultado Codex', () => 
     usage: { input_tokens: 10, output_tokens: 4 },
   });
   assert(!JSON.stringify(eventos).includes('não pode vazar'));
+});
+
+test('falha de login Codex vira 503 sem guardar conteúdo interno dos eventos', () => {
+  const erro = erroCodexParaErroDeAgente(
+    new ErroCodex('autenticacao', 'Codex não está autenticado', [
+      { type: 'thread.started', model: 'gpt-test', command: 'segredo' },
+      { type: 'item.completed', item: { text: 'conteúdo privado' } },
+    ]),
+  );
+  assert.equal(erro.status, 503);
+  assert.equal(erro.codigo, 'sem_assinatura_codex');
+  assert.equal(erro.eventos?.length, 2);
+  assert(!JSON.stringify(erro.eventos).includes('segredo'));
+  assert(!JSON.stringify(erro.eventos).includes('conteúdo privado'));
+});
+
+test('reserva de pedido e troca de conta Codex são mutuamente exclusivas', () => {
+  const liberarPedido = reservarPedidoCodex();
+  assert(liberarPedido);
+  assert.equal(reservarTrocaDeContaCodex(), null);
+  liberarPedido();
+
+  const liberarTroca = reservarTrocaDeContaCodex();
+  assert(liberarTroca);
+  assert.equal(reservarPedidoCodex(), null);
+  liberarTroca();
+});
+
+test('pedido HofOS é recusado enquanto uma troca de conta Codex está reservada', async () => {
+  const liberarTroca = reservarTrocaDeContaCodex();
+  assert(liberarTroca);
+  try {
+    await assert.rejects(executarAgente(pedido()), (err: unknown) => {
+      assert(err instanceof ErroDeAgente);
+      assert.equal(err.status, 503);
+      assert.equal(err.codigo, 'troca_conta_codex');
+      return true;
+    });
+  } finally {
+    liberarTroca();
+  }
 });
 
 test('painel informa quando falta assinatura Codex', async () => {

@@ -19,7 +19,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { executarNoCodex, type ResultadoCodex } from './codex-agente.js';
+import { ErroCodex, executarNoCodex, type ResultadoCodex } from './codex-agente.js';
 import { config } from './config.js';
 import { binarioDe, codexAssinaturaAtiva } from './contas.js';
 import { esquecerUsoNoEscritorio, registrarUsoNoEscritorio } from './escritorio.js';
@@ -310,6 +310,35 @@ const emAndamento = new Map<string, Promise<RespostaDeAgente>>();
 const concluidos = new Map<string, { ate: number; resposta?: RespostaDeAgente; erro?: ErroDeAgente }>();
 const LEMBRAR_RESULTADO_MS = 5 * 60_000;
 const MAX_LEMBRADOS = 500;
+let pedidosCodexReservados = 0;
+let trocaDeContaCodexReservada = false;
+
+function liberador(acao: () => void): () => void {
+  let liberado = false;
+  return () => {
+    if (liberado) return;
+    liberado = true;
+    acao();
+  };
+}
+
+/** Reserva atômica compartilhada por admissão de pedidos e troca da conta ativa. */
+export function reservarPedidoCodex(): (() => void) | null {
+  if (trocaDeContaCodexReservada) return null;
+  pedidosCodexReservados += 1;
+  return liberador(() => {
+    pedidosCodexReservados = Math.max(0, pedidosCodexReservados - 1);
+  });
+}
+
+/** Impede novos pedidos até a troca terminar e recusa a troca se já houver pedido admitido. */
+export function reservarTrocaDeContaCodex(): (() => void) | null {
+  if (trocaDeContaCodexReservada || pedidosCodexReservados > 0) return null;
+  trocaDeContaCodexReservada = true;
+  return liberador(() => {
+    trocaDeContaCodexReservada = false;
+  });
+}
 
 export function executarAgente(pedido: PedidoDeAgente): Promise<RespostaDeAgente> {
   const agora = Date.now();
@@ -325,7 +354,13 @@ export function executarAgente(pedido: PedidoDeAgente): Promise<RespostaDeAgente
     console.log(`[agentes] pedido ${pedido.id} repetido depois de terminar: devolve o resultado guardado`);
     return jaFeito.resposta ? Promise.resolve(jaFeito.resposta) : Promise.reject(jaFeito.erro);
   }
-  const promessa = admitir(pedido);
+  const liberarPedido = reservarPedidoCodex();
+  if (!liberarPedido) {
+    const msg = 'uma troca da conta Codex está em andamento; tente novamente em instantes';
+    registrar(pedido, 'recusado', 0, 0, null, msg);
+    return Promise.reject(new ErroDeAgente(503, 'troca_conta_codex', msg));
+  }
+  const promessa = admitir(pedido).finally(liberarPedido);
   emAndamento.set(chave, promessa);
   const lembrar = (item: { resposta?: RespostaDeAgente; erro?: ErroDeAgente }) => {
     if (concluidos.size >= MAX_LEMBRADOS) concluidos.delete(concluidos.keys().next().value as string);
@@ -437,6 +472,25 @@ export function eventosDoResultadoCodex(resultado: ResultadoCodex): unknown[] {
   ];
 }
 
+export function eventosDeDiagnosticoCodex(eventos: Record<string, unknown>[]): unknown[] {
+  return eventos.map((evento) => ({
+    type: 'system',
+    subtype: 'diagnostic',
+    provider: 'codex',
+    event_type: typeof evento.type === 'string' ? evento.type : 'unknown',
+    ...(typeof evento.model === 'string' ? { model: evento.model } : {}),
+    ...(evento.type === 'turn.completed' && evento.usage && typeof evento.usage === 'object' ? { usage: evento.usage } : {}),
+  }));
+}
+
+export function erroCodexParaErroDeAgente(erro: ErroCodex): ErroDeAgente {
+  const eventos = eventosDeDiagnosticoCodex(erro.eventos);
+  if (erro.tipo === 'autenticacao') {
+    return new ErroDeAgente(503, 'sem_assinatura_codex', 'a assinatura Codex precisa ser autenticada novamente', eventos);
+  }
+  return new ErroDeAgente(502, 'falha', erro.message.slice(0, 300), eventos);
+}
+
 async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<RespostaDeAgente> {
   const abort = new AbortController();
   const inicio = Date.now();
@@ -476,6 +530,11 @@ async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<Resposta
       const msg = `sem resposta em ${Math.round(restante / 1000)} s`;
       registrar(pedido, 'erro', esperaMs, duracao, modelo, msg);
       throw new ErroDeAgente(504, 'tempo_esgotado', msg, eventos);
+    }
+    if (err instanceof ErroCodex) {
+      const convertido = erroCodexParaErroDeAgente(err);
+      registrar(pedido, 'erro', esperaMs, duracao, modelo, convertido.message.slice(0, 300));
+      throw convertido;
     }
     const msg = err instanceof Error ? err.message : String(err);
     registrar(pedido, 'erro', esperaMs, duracao, modelo, msg.slice(0, 300));

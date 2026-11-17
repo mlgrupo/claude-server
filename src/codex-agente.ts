@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -31,6 +31,12 @@ export interface DependenciasCodex {
   binario?: string;
   prefixoArgs?: string[];
   agentesDir?: string;
+  prepararArquivos?: (
+    pedido: PedidoCodex,
+    cwd: string,
+    signal: AbortSignal,
+  ) => Promise<ArquivosTemporarios>;
+  lerResposta?: (arquivo: string, signal: AbortSignal) => Promise<string>;
 }
 
 export interface ArquivosTemporarios {
@@ -98,11 +104,20 @@ function objeto(v: unknown): Record<string, unknown> | undefined {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 }
 
-export function converterJsonlCodex(
-  jsonl: string,
-  resposta: string,
-  esquema?: Record<string, unknown>,
-): ResultadoCodex {
+export type TipoErroCodex = 'autenticacao' | 'saida' | 'processo';
+
+export class ErroCodex extends Error {
+  constructor(
+    readonly tipo: TipoErroCodex,
+    mensagem: string,
+    readonly eventos: Record<string, unknown>[] = [],
+  ) {
+    super(mensagem);
+    this.name = 'ErroCodex';
+  }
+}
+
+function lerEventosJsonl(jsonl: string): Record<string, unknown>[] {
   const eventos: Record<string, unknown>[] = [];
   for (const [indice, linha] of jsonl.split(/\r?\n/).entries()) {
     if (!linha.trim()) continue;
@@ -112,11 +127,28 @@ export function converterJsonlCodex(
       if (!o) throw new Error('evento não é objeto');
       eventos.push(o);
     } catch (err) {
-      throw new Error(`JSONL inválido do Codex na linha ${indice + 1}: ${(err as Error).message}`);
+      throw new ErroCodex('saida', `JSONL inválido do Codex na linha ${indice + 1}: ${(err as Error).message}`, eventos);
     }
   }
+  return eventos;
+}
+
+export function converterJsonlCodex(
+  jsonl: string,
+  resposta: string,
+  esquema?: Record<string, unknown>,
+): ResultadoCodex {
+  const eventos = lerEventosJsonl(jsonl);
+  return converterEventosCodex(eventos, resposta, esquema);
+}
+
+function converterEventosCodex(
+  eventos: Record<string, unknown>[],
+  resposta: string,
+  esquema?: Record<string, unknown>,
+): ResultadoCodex {
   const final = [...eventos].reverse().find((e) => e.type === 'turn.completed');
-  if (!final) throw new Error('Codex terminou sem evento turn.completed');
+  if (!final) throw new ErroCodex('saida', 'Codex terminou sem evento turn.completed', eventos);
   const inicio = eventos.find((e) => e.type === 'thread.started');
   const usageObj = objeto(final.usage);
   const usage = usageObj
@@ -127,7 +159,7 @@ export function converterJsonlCodex(
     try {
       structuredOutput = JSON.parse(resposta);
     } catch {
-      throw new Error('Codex devolveu JSON estruturado inválido');
+      throw new ErroCodex('saida', 'Codex devolveu JSON estruturado inválido', eventos);
     }
   }
   return {
@@ -167,17 +199,17 @@ function ambienteMinimoCodex(): NodeJS.ProcessEnv {
   return env;
 }
 
-async function prepararArquivos(pedido: PedidoCodex, cwd: string): Promise<ArquivosTemporarios> {
+async function prepararArquivos(pedido: PedidoCodex, cwd: string, signal: AbortSignal): Promise<ArquivosTemporarios> {
   const resposta = path.join(cwd, 'resposta.txt');
   let esquema: string | undefined;
   if (pedido.esquema) {
     esquema = path.join(cwd, 'esquema.json');
-    await fs.writeFile(esquema, JSON.stringify(pedido.esquema), { mode: 0o600 });
+    await fs.writeFile(esquema, JSON.stringify(pedido.esquema), { mode: 0o600, signal });
   }
   const imagens: string[] = [];
   for (const [i, imagem] of pedido.imagens.entries()) {
     const arquivo = path.join(cwd, `imagem-${i}.${extensao(imagem.mime)}`);
-    await fs.writeFile(arquivo, Buffer.from(imagem.base64, 'base64'), { mode: 0o600 });
+    await fs.writeFile(arquivo, Buffer.from(imagem.base64, 'base64'), { mode: 0o600, signal });
     imagens.push(arquivo);
   }
   return { cwd, resposta, esquema, imagens };
@@ -204,17 +236,47 @@ export async function executarNoCodex(
   signal: AbortSignal,
   deps: DependenciasCodex = {},
 ): Promise<ResultadoCodex> {
-  if (signal.aborted) throw new Error('execução Codex cancelada');
-  const raiz = deps.agentesDir ?? config.agentesDir;
-  await fs.mkdir(raiz, { recursive: true, mode: 0o700 });
-  const cwd = await fs.mkdtemp(path.join(raiz, '.codex-pedido-'));
+  let filho: ChildProcessWithoutNullStreams | undefined;
+  let cwd: string | undefined;
   let timerKill: NodeJS.Timeout | undefined;
+  let cancelada = signal.aborted;
+  let esgotou = false;
+  const preparacao = new AbortController();
+  const encerrar = (motivo: 'cancelada' | 'tempo') => {
+    if (motivo === 'cancelada') cancelada = true;
+    else esgotou = true;
+    preparacao.abort();
+    if (!filho) return;
+    matarProcesso(filho.pid, (s) => filho?.kill(s) ?? false, 'SIGTERM');
+    timerKill ??= setTimeout(() => matarProcesso(filho?.pid, (s) => filho?.kill(s) ?? false, 'SIGKILL'), 2_000);
+    timerKill.unref();
+  };
+  const cancelar = () => encerrar('cancelada');
+  signal.addEventListener('abort', cancelar, { once: true });
+  const timeout = setTimeout(() => encerrar('tempo'), Math.max(1, pedido.limiteMs));
+  const validarPrazo = () => {
+    if (cancelada) throw new Error('execução Codex cancelada');
+    if (esgotou) throw new Error(`execução Codex excedeu o limite de ${pedido.limiteMs} ms`);
+  };
+  const raiz = deps.agentesDir ?? config.agentesDir;
   try {
-    const arquivos = await prepararArquivos(pedido, cwd);
+    validarPrazo();
+    await fs.mkdir(raiz, { recursive: true, mode: 0o700 });
+    validarPrazo();
+    cwd = await fs.mkdtemp(path.join(raiz, '.codex-pedido-'));
+    validarPrazo();
+    let arquivos: ArquivosTemporarios;
+    try {
+      arquivos = await (deps.prepararArquivos ?? prepararArquivos)(pedido, cwd, preparacao.signal);
+    } catch (err) {
+      validarPrazo();
+      throw err;
+    }
+    validarPrazo();
     const binario = deps.binario ?? binarioDe('codex');
     if (!binario) throw new Error('binário do Codex não está instalado');
     const args = [...(deps.prefixoArgs ?? []), ...argumentosCodex(arquivos, config.agentesCodexModel)];
-    const filho = spawn(binario, args, {
+    filho = spawn(binario, args, {
       cwd,
       env: ambienteMinimoCodex(),
       shell: false,
@@ -224,42 +286,54 @@ export async function executarNoCodex(
     });
     let stdout = '';
     let stderr = '';
-    let cancelada = false;
-    let esgotou = false;
     filho.stdout.setEncoding('utf8');
     filho.stderr.setEncoding('utf8');
     filho.stdout.on('data', (chunk: string) => (stdout += chunk));
     filho.stderr.on('data', (chunk: string) => (stderr += chunk));
-    const encerrar = (motivo: 'cancelada' | 'tempo') => {
-      if (motivo === 'cancelada') cancelada = true;
-      else esgotou = true;
-      matarProcesso(filho.pid, (s) => filho.kill(s), 'SIGTERM');
-      timerKill = setTimeout(() => matarProcesso(filho.pid, (s) => filho.kill(s), 'SIGKILL'), 2_000);
-      timerKill.unref();
-    };
-    const cancelar = () => encerrar('cancelada');
-    signal.addEventListener('abort', cancelar, { once: true });
-    const timeout = setTimeout(() => encerrar('tempo'), Math.max(1, pedido.limiteMs));
-    timeout.unref();
+    let erroStdin: Error | undefined;
+    const encerramento = new Promise<number>((resolve, reject) => {
+      filho?.once('error', reject);
+      filho?.once('close', (code) => resolve(code ?? 1));
+    });
+    filho.stdin.once('error', (err) => {
+      erroStdin = err;
+    });
     filho.stdin.end(comporPromptCodex(pedido));
-    try {
-      const codigo = await new Promise<number>((resolve, reject) => {
-        filho.once('error', reject);
-        filho.once('close', (code) => resolve(code ?? 1));
-      });
-      if (cancelada) throw new Error('execução Codex cancelada');
-      if (esgotou) throw new Error(`execução Codex excedeu o limite de ${pedido.limiteMs} ms`);
-      if (codigo !== 0) {
-        throw new Error(`Codex terminou com código ${codigo}${stderr.trim() ? `: ${stderr.trim().slice(0, 1_000)}` : ''}`);
+    const codigo = await encerramento;
+    validarPrazo();
+    if (codigo !== 0) {
+      let eventos: Record<string, unknown>[] = [];
+      try {
+        eventos = lerEventosJsonl(stdout);
+      } catch (err) {
+        if (err instanceof ErroCodex) eventos = err.eventos;
       }
-      const resposta = await fs.readFile(arquivos.resposta, 'utf8');
-      return converterJsonlCodex(stdout, resposta, pedido.esquema);
-    } finally {
-      clearTimeout(timeout);
-      if (timerKill) clearTimeout(timerKill);
-      signal.removeEventListener('abort', cancelar);
+      const detalhe = stderr.trim().slice(0, 1_000);
+      const diagnosticoAutenticacao = `${stderr}\n${stdout}`;
+      if (/\b401\b|unauthorized|not logged in|authentication|login required|refresh token|access token.*(?:expired|invalid)|token.*(?:revoked|expired|invalid)/i.test(diagnosticoAutenticacao)) {
+        throw new ErroCodex('autenticacao', 'a assinatura Codex precisa ser autenticada novamente', eventos);
+      }
+      throw new ErroCodex('processo', `Codex terminou com código ${codigo}${detalhe ? `: ${detalhe}` : ''}`, eventos);
     }
+    if (erroStdin) throw new ErroCodex('processo', `não foi possível enviar o pedido ao Codex: ${erroStdin.message}`);
+    const eventos = lerEventosJsonl(stdout);
+    if (![...eventos].reverse().find((evento) => evento.type === 'turn.completed')) {
+      throw new ErroCodex('saida', 'Codex terminou sem evento turn.completed', eventos);
+    }
+    let resposta: string;
+    try {
+      resposta = await (deps.lerResposta ?? ((arquivo, signalLeitura) =>
+        fs.readFile(arquivo, { encoding: 'utf8', signal: signalLeitura })))(arquivos.resposta, preparacao.signal);
+    } catch (err) {
+      validarPrazo();
+      throw new ErroCodex('saida', `não foi possível ler a resposta final do Codex: ${(err as Error).message}`, eventos);
+    }
+    validarPrazo();
+    return converterEventosCodex(eventos, resposta, pedido.esquema);
   } finally {
-    await fs.rm(cwd, { recursive: true, force: true });
+    clearTimeout(timeout);
+    if (timerKill) clearTimeout(timerKill);
+    signal.removeEventListener('abort', cancelar);
+    if (cwd) await fs.rm(cwd, { recursive: true, force: true });
   }
 }

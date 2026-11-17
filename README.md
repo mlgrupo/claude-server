@@ -151,7 +151,7 @@ Localmente, o SDK usa o login do Claude Code da sua máquina (e a tela Contas mo
 Este servidor executa qualquer comando sem aprovação e fica exposto na internet. **A senha e o API token dão um shell no servidor** (pelo agente e pelo terminal web) e acesso às credenciais configuradas nele.
 
 - Use senha e token longos e aleatórios; troque se vazarem (trocar `APP_PASSWORD` derruba todas as sessões web).
-- `APP_PASSWORD`, `API_TOKEN`, `SESSION_SECRET`, `CLIENT_TOKENS` e a variável legada `AGENTES_ANTHROPIC_API_KEY` não são repassadas ao chat, terminal nem executor Codex. A chave legada não é mais usada. As demais variáveis (`GH_TOKEN`…) continuam visíveis apenas para o agente principal do chat.
+- `APP_PASSWORD`, `API_TOKEN`, `SESSION_SECRET`, `CLIENT_TOKENS` e a variável legada `AGENTES_ANTHROPIC_API_KEY` não são repassadas ao chat, terminal nem executor Codex. A chave legada não é mais usada. As demais variáveis (`GH_TOKEN`…) continuam visíveis para o agente principal do chat e para o terminal, mas não para o executor Codex do HofOS.
 - Os logins guardados em `/data/contas` dão acesso às contas de quem entrou: quem tem a senha do Habblaud consegue usá-las pelo terminal. Remova a conta de quem sair da equipe.
 - Conteúdo da web que o agente lê pode tentar manipulá-lo (prompt injection). Dê ao `GH_TOKEN` e a outras credenciais só as permissões necessárias.
 - O login tem limite de 10 tentativas a cada 15 minutos por IP.
