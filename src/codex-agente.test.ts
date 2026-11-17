@@ -77,7 +77,7 @@ function pedido(esquema?: Record<string, unknown>): PedidoCodex {
     prompt: 'Analise este dado.',
     esquema,
     imagens: [],
-    limiteMs: 5_000,
+    limiteMs: 30_000,
   };
 }
 

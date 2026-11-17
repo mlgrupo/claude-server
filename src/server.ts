@@ -299,6 +299,9 @@ async function main(): Promise<void> {
       if (provedor === 'claude' && runningCount() > 0) {
         throw new ErroDeConta(409, 'espere as tarefas do chat terminarem para trocar a conta do Claude');
       }
+      if (provedor === 'codex' && agentesOcupados() > 0) {
+        throw new ErroDeConta(409, 'espere os pedidos do HofOS terminarem para trocar a conta do Codex');
+      }
       await usarConta(provedor, id);
       if (provedor === 'claude') esquecerLimite();
       res.json(await contasComAgentes());

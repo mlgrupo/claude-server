@@ -22,8 +22,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { query, type Options, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
-import { agentEnv, config } from './config.js';
+import { executarNoCodex, type ResultadoCodex } from './codex-agente.js';
+import { config } from './config.js';
+import { binarioDe, codexAssinaturaAtiva } from './contas.js';
 import { esquecerUsoNoEscritorio, registrarUsoNoEscritorio } from './escritorio.js';
 
 export type Esforco = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -350,11 +351,15 @@ export function executarAgente(pedido: PedidoDeAgente): Promise<RespostaDeAgente
 }
 
 function admitir(pedido: PedidoDeAgente): Promise<RespostaDeAgente> {
-  if (!config.agentesApiKey) {
-    // Quem chamou segue pelo caminho dele (o HofOS cai na API própria na hora).
-    const msg = 'os agentes usam a chave da API e AGENTES_ANTHROPIC_API_KEY não está definida';
+  if (!binarioDe('codex')) {
+    const msg = 'o binário do Codex não está instalado no servidor';
     registrar(pedido, 'recusado', 0, 0, null, msg);
-    return Promise.reject(new ErroDeAgente(503, 'sem_chave_da_api', msg));
+    return Promise.reject(new ErroDeAgente(503, 'codex_indisponivel', msg));
+  }
+  if (!codexAssinaturaAtiva()) {
+    const msg = 'não há uma assinatura ChatGPT/Codex ativa na tela Contas';
+    registrar(pedido, 'recusado', 0, 0, null, msg);
+    return Promise.reject(new ErroDeAgente(503, 'sem_assinatura_codex', msg));
   }
   const { agente } = pedido;
   const esperando = naFilaDoAgente(agente.id);
@@ -419,22 +424,24 @@ export function pastaDoAgente(id: string): string {
   return path.join(config.agentesDir, id);
 }
 
-function promptComImagens(pedido: PedidoDeAgente): AsyncIterable<SDKUserMessage> {
-  const conteudo = [
-    { type: 'text', text: pedido.prompt },
-    ...pedido.imagens.map((img) => ({
-      type: 'image',
-      source: { type: 'base64', media_type: img.mime, data: img.base64 },
-    })),
+export function eventosDoResultadoCodex(resultado: ResultadoCodex): unknown[] {
+  return [
+    {
+      type: 'system',
+      subtype: 'init',
+      model: resultado.modelo,
+      session_id: null,
+      provider: 'codex',
+    },
+    {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: resultado.resposta,
+      ...(resultado.structuredOutput !== undefined ? { structured_output: resultado.structuredOutput } : {}),
+      usage: resultado.usage ?? {},
+    },
   ];
-  return (async function* () {
-    yield {
-      type: 'user',
-      message: { role: 'user', content: conteudo },
-      parent_tool_use_id: null,
-      session_id: '',
-    } as unknown as SDKUserMessage;
-  })();
 }
 
 async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<RespostaDeAgente> {
@@ -450,62 +457,29 @@ async function rodar(pedido: PedidoDeAgente, esperaMs: number): Promise<Resposta
   }, restante);
 
   const { agente } = pedido;
-  const cwd = pastaDoAgente(agente.id);
   const eventos: unknown[] = [];
-  let modelo = agente.modelo;
+  let modelo = config.agentesCodexModel ?? 'codex';
   try {
-    await fs.mkdir(cwd, { recursive: true });
-    const options: Options = {
-      cwd,
-      model: agente.modelo,
-      // O Haiku 5.5 aceita esforço (menos "pensar" = menos saída cobrada); modelo
-      // sem suporte ignora em silêncio.
-      effort: agente.esforco,
-      // Pedido com dado de cliente não deixa transcrição no disco do servidor.
-      ...(pedido.privado ? { persistSession: false } : {}),
-      systemPrompt: pedido.sistema.trim() || 'Você é um assistente. Responda em português do Brasil.',
-      tools: [],
-      settingSources: [],
-      maxTurns: pedido.esquema ? 4 : 2,
-      ...(pedido.esquema ? { outputFormat: { type: 'json_schema', schema: pedido.esquema } } : {}),
-      abortController: abort,
-      // A chave da API vem antes do login da assinatura no Claude Code: os
-      // agentes nunca gastam a conta de quem está usando o chat.
-      env: { ...agentEnv(), ANTHROPIC_API_KEY: config.agentesApiKey, CLAUDE_CODE_OAUTH_TOKEN: undefined },
-      stderr: (data: string) => process.stderr.write(`[agente ${agente.id}] ${data}`),
-    };
-    const prompt = pedido.imagens.length ? promptComImagens(pedido) : pedido.prompt;
-    for await (const msg of query({ prompt, options }) as AsyncIterable<SDKMessage>) {
-      const m = msg as Record<string, unknown>;
-      if (m.type === 'system' && m.subtype === 'init') {
-        if (typeof m.model === 'string') modelo = m.model;
-        eventos.push({ type: 'system', subtype: 'init', model: m.model, session_id: m.session_id });
-      } else if (m.type === 'rate_limit_event') {
-        // Limite da chave da API, não da assinatura: não mexe no medidor.
-        eventos.push(m);
-      } else if (m.type === 'result') {
-        eventos.push(m);
-      }
-    }
-    const resultado = eventos.find((e) => (e as { type?: string }).type === 'result') as
-      | { is_error?: boolean; subtype?: string; result?: string; usage?: Record<string, number> }
-      | undefined;
+    const resultado = await executarNoCodex(
+      {
+        id: pedido.id,
+        sistema: pedido.sistema,
+        prompt: pedido.prompt,
+        esquema: pedido.esquema,
+        imagens: pedido.imagens,
+        limiteMs: restante,
+      },
+      abort.signal,
+    );
+    modelo = resultado.modelo;
+    eventos.push(...eventosDoResultadoCodex(resultado));
     const duracao = Date.now() - inicio;
-    if (!resultado) {
-      registrar(pedido, 'erro', esperaMs, duracao, modelo, 'o Claude Code terminou sem resultado');
-      throw new ErroDeAgente(502, 'sem_resultado', 'o Claude Code terminou sem resultado', eventos);
-    }
-    if (resultado.is_error) {
-      const motivo = [resultado.subtype, resultado.result].filter(Boolean).join(': ').slice(0, 300);
-      registrar(pedido, 'erro', esperaMs, duracao, modelo, motivo);
-      throw new ErroDeAgente(502, 'erro_do_claude', motivo || 'o Claude devolveu erro', eventos);
-    }
     registrar(pedido, 'ok', esperaMs, duracao, modelo, null, resultado.usage);
     return { id: pedido.id, agente: agente.id, modelo, esperaMs, duracaoMs: duracao, eventos };
   } catch (err) {
     if (err instanceof ErroDeAgente) throw err;
     const duracao = Date.now() - inicio;
-    if (estourou) {
+    if (estourou || (err instanceof Error && err.message.includes('excedeu o limite'))) {
       const msg = `sem resposta em ${Math.round(restante / 1000)} s`;
       registrar(pedido, 'erro', esperaMs, duracao, modelo, msg);
       throw new ErroDeAgente(504, 'tempo_esgotado', msg, eventos);
