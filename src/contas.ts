@@ -504,3 +504,9 @@ export async function iniciarContas(): Promise<NodeJS.Timeout> {
 export function claudeLogado(): boolean {
   return Boolean(process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim() || identificar('claude', origemViva('claude')));
 }
+
+/** O Codex está autenticado por uma assinatura ChatGPT, não por chave da API? */
+export function codexAssinaturaAtiva(): boolean {
+  const conta = identificar('codex', origemViva('codex'));
+  return Boolean(conta && conta.plano !== 'Chave da API');
+}
